@@ -28,14 +28,6 @@
 
 typedef uint32_t tHash;
 
-typedef struct tArray {
-
-} tArray;
-
-typedef struct tValue {
-
-} tValue;
-
 typedef enum {
     unassignedNode = 0,
     childNode,
@@ -50,10 +42,10 @@ typedef struct tNode {
     byte      * key;
     tNodeType   type;
     union {
-        struct tNode  * child;
-        struct tArray * array;
-        byte          * string;
-        int64_t         number;
+        struct tNode * child;
+        struct tNode * array;
+        byte         * string;
+        int64_t        number;
     };
 } tNode;
 
@@ -61,26 +53,35 @@ static tNode * gRootNode = NULL;
 
 byte * copyToString(byte * start, size_t length)
 {
-    byte * result = calloc(length + 1, sizeof(byte)); /* extra byte to add null */
-    if (result != NULL)
+    byte * result = calloc(length + 1, 1); /* extra byte to guarantee a trailing null */
+    if (result != NULL && length > 0)
     {
         memcpy(result, start, length);
     }
     return result;
 }
 
-tHash stringHash(byte *ptr, size_t len)
+tHash hashString(byte *ptr, size_t len)
 {
     tHash hash = 199999; /* seed with largish prime */
 
     for (int i = len; i > 0; --i)
     {
-        hash = hash * 43 + *ptr++;
+        /* The 'djb2' string hash function */
+        hash = (hash << 5) + hash + *ptr++;
     }
     return hash;
 }
 
-void dumpNode( tNode * node, int depth )
+void setNodeKey(tNode * node, byte * keyStart, size_t length)
+{
+    node->key  = copyToString(keyStart, length);
+    node->hash = hashString(keyStart, length);
+}
+
+void dumpNodes(tNode * node, int depth);
+
+void dumpNode(tNode * node, int depth)
 {
 #ifdef optDebugOutput
     int i = sizeof(kIndent) - (depth * 4);
@@ -91,10 +92,12 @@ void dumpNode( tNode * node, int depth )
     {
     case childNode:
         Log(LOG_INFO, "%s node type = child @ %p", &kIndent[i], node->child );
+        dumpNodes(node->child, depth + 1);
         break;
 
     case arrayNode:
         Log(LOG_INFO, "%s node type = array", &kIndent[i] );
+        dumpNodes(node->array, depth + 1);
         break;
 
     case stringNode:
@@ -119,19 +122,87 @@ void dumpNodes(tNode * node, int depth)
     while (node != NULL)
     {
         dumpNode(node, depth);
-        if (node->type == childNode)
-        {
-            dumpNodes(node->child, depth + 1);
-        }
         node = node->next;
     }
 #endif
 }
 
+
+tNode * parseArray(byte **ptr, size_t *length)
+{
+    tNode * result;
+    tNode * node;
+    tNode * previous;
+    enum { outsideString, insideString } state;
+    byte  * start;
+
+    state = outsideString;
+
+    result = NULL;
+    while (**ptr != '\n' && *length > 0)
+    {
+        DebugOut("%c", **ptr);
+
+        switch (state)
+        {
+        case outsideString:
+            switch (**ptr)
+            {
+            case '"':
+                state = insideString;
+                start = *ptr + 1;
+                break;
+
+            case ',':
+                Log(LOG_INFO, "array separator");
+                break;
+
+            case ']':
+                Log(LOG_INFO, "array terminator");
+                return result;
+            }
+            break;
+
+        case insideString:
+            switch (**ptr)
+            {
+            case '"':
+                state = outsideString;
+
+                if (result == NULL)
+                {
+                    result = calloc(sizeof(tNode), 1);
+                    previous = result;
+                    node     = result;
+                }
+                else
+                {
+                    node->next = calloc(sizeof(tNode), 1);
+                    previous = node;
+                    node     = node->next;
+                }
+
+                setNodeKey(node, start, *ptr - start);
+                node->type   = stringNode;
+                node->string = node->key;
+                break;
+
+            case '\\':
+                ++(*ptr);
+                --(*length);
+                break;
+            }
+            break;
+        }
+
+        ++(*ptr);
+        --(*length);
+    }
+}
+
 void parseValue(byte **ptr, size_t *length, tNode * node)
 {
     byte  * start;
-    byte  * str;
     enum { outsideString, insideString } state;
     int     digitsEnded;
 
@@ -148,7 +219,6 @@ void parseValue(byte **ptr, size_t *length, tNode * node)
 
             case '[':
                 node->type = arrayNode;
-                state = outsideString;
                 break;
 
             case '"':
@@ -169,38 +239,7 @@ void parseValue(byte **ptr, size_t *length, tNode * node)
             break;
 
         case arrayNode:
-            switch (state)
-            {
-            case outsideString:
-                switch (**ptr)
-                {
-                case '"':
-                    state = insideString;
-                    start = *ptr;
-                    break;
-                case ',':
-                case ']':
-                    Log(LOG_INFO, "array terminate");
-                    break;
-                }
-                break;
-
-            case insideString:
-                switch (**ptr)
-                {
-                case '"':
-                    state = outsideString;
-                    str = copyToString(start, *ptr - start);
-                    DebugOut("\n    string: \"%s\"", str);
-                    free(str);
-                    break;
-                case '\\':
-                    ++(*ptr);
-                    --(*length);
-                    break;
-                }
-                break;
-            }
+            node->array = parseArray(ptr, length);
             break;
 
         case stringNode:
@@ -213,7 +252,7 @@ void parseValue(byte **ptr, size_t *length, tNode * node)
         case numberNode:
             if (!digitsEnded && **ptr >= '0' && **ptr <= '9')
             {
-                node->type = numberNode;
+                node->type   = numberNode;
                 node->number = (node->number * 10) + (**ptr - '0');
             }
             else
@@ -229,85 +268,26 @@ void parseValue(byte **ptr, size_t *length, tNode * node)
 
 void parseNodes(byte **ptr, size_t *length, tNode *current)
 {
-    enum    { endOfLine, isKey, isComment, isValue, isArray, isChild } state;
-    tHash   hash;
-    byte    *kStart;
-    byte    *kEnd;
+    enum    { endOfLine, isKey, isComment, isValue, isArray, isChild, endOfChild } state;
+    tNode   * previous;
+    byte    * kStart;
+    byte    * kEnd;
+
+    current->type  = childNode;
+    current->child = calloc(sizeof(tNode), 1);
+    previous = current;
+    current = current->child;
 
     state = endOfLine;
     while ( *length > 0 )
     {
-        DebugOut( "%c", **ptr);
-
-        switch (**ptr)
-        {
-        case ' ':
-        case '\t':
-            /* ignore whitespace */
-            break;
-
-            /* if we hit a comment, consume up to next newline */
-        case '#':
-            state = isComment;
-            Log(LOG_INFO, "\ncomment: ");
-            break;
-
-        case '=':
-            state = isValue;
-
-            current->hash = hash;
-            current->key  = copyToString(kStart, kEnd - kStart + 1);
-            break;
-
-        case '{':
-            state = isChild;
-
-            current->hash  = hash;
-            current->key   = copyToString(kStart, kEnd - kStart + 1);
-            current->type  = childNode;
-            current->child = calloc(sizeof(tNode), sizeof(byte));
-            break;
-
-        case '}':
-            Log(LOG_INFO, "leaving child");
-            ++(*ptr);
-            --(*length);
-            return; /* back to the parent */
-
-        case '\n':
-            state = endOfLine;
-            break;
-
-        default:
-            if (state == isKey)
-            {
-                current->hash = current->hash * 43 + **ptr;
-                if (kStart == NULL)
-                {
-                    kStart = *ptr;
-                }
-                kEnd = *ptr;
-            }
-            break;
-        }
-
-        ++(*ptr);
-        --(*length);
-
         /* state-based processing */
         switch (state)
         {
         case endOfLine:
-            if (current->type != unassignedNode)
-            {   /* node has been filled in, so allocate a fresh one */
-                current->next = calloc(sizeof(tNode), sizeof(byte));
-                dumpNode(current,0);
-                current = current->next;
-            }
-            /* the line begins with the key */
-            state  = isKey;
+            /* each line begins with a key */
             kStart = NULL;
-            current->hash = 199999;
+            state  = isKey;
             break;
 
         case isComment:
@@ -320,36 +300,96 @@ void parseNodes(byte **ptr, size_t *length, tNode *current)
             break;
 
         case isValue:
+            setNodeKey(current, kStart, kEnd - kStart + 1);
+
             parseValue( ptr, length, current );
+
+            current->next = calloc(sizeof(tNode), 1);
+            previous = current;
+            current = current->next;
             break;
 
         case isChild:
-            Log(LOG_INFO, "descend into child @ %p", current->child);
-            parseNodes( ptr, length, current->child );
+            current->type = childNode;
+            setNodeKey(current, kStart, kEnd - kStart + 1);
+
+            parseNodes( ptr, length, current );
+
+            current->next = calloc(sizeof(tNode), 1);
+            previous = current;
+            current = current->next;
+            break;
+
+        case endOfChild:
+            /* discard the empty node at the end */
+            previous->next = NULL;
+            free(current);
+            return;
+        }
+
+        switch (**ptr)
+        {
+        case ' ':
+        case '\t':
+            /* ignore whitespace */
+            break;
+
+        case '\n':
+            state = endOfLine;
+            break;
+
+            /* if we hit a comment, consume up to next newline */
+        case '#':
+            state = isComment;
+            break;
+
+        case '=':
+            state = isValue;
+            break;
+
+        case '{':
+            state = isChild;
+            break;
+
+        case '}':
+            state = endOfChild;
+            break; /* back to the parent */
+
+        default:
+            if (state == isKey)
+            {
+                /* everything else is part of the key */
+                if (kStart == NULL)
+                {
+                    kStart = *ptr;
+                }
+                kEnd = *ptr;
+            }
             break;
         }
+
+        ++(*ptr);
+        --(*length);
     }
 }
 
 
 void parseMetadata(byte *metadata, size_t length)
 {
-    tNode * root = calloc(sizeof(tNode), sizeof(byte));
-    gRootNode = root;
+    tNode * root;
 
     DebugOut("\n_______________________________\n\n");
     DebugOut("%s", metadata);
     DebugOut("\n_______________________________\n\n");
-    while (length > 0)
-    {
-        if (root != NULL)
-        {
-            parseNodes(&metadata, &length, root);
-            root->next = calloc(sizeof(tNode), sizeof(byte));
-            root = root->next;
-        }
-    }
 
-    Log(LOG_DEBUG,"node dump:\n");
-    dumpNodes(gRootNode,0);
+    root = calloc(sizeof(tNode), 1);
+    if (root != NULL)
+    {
+        gRootNode = root;
+        setNodeKey(root, "root node", 9);
+        parseNodes(&metadata, &length, root);
+
+        Log(LOG_DEBUG,"######## node dump ########\n");
+        dumpNodes(gRootNode,0);
+    }
 }

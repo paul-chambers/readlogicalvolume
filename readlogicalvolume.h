@@ -11,7 +11,7 @@ typedef unsigned char byte;
 
 #ifdef  optDebugOutput
 #define Log( level, msg, ... )   \
-        fprintf( stderr, "\n### %20s [%3d] " msg, __func__, __LINE__, ##__VA_ARGS__ )
+        fprintf( stderr, "### %20s [%3d] " msg "\n", __func__, __LINE__, ##__VA_ARGS__ )
 #define DebugOut( msg, ... ) \
         fprintf(stderr, msg, ##__VA_ARGS__)
 #else
