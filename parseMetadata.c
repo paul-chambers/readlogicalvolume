@@ -246,6 +246,7 @@ char * dupString( tBuffer * buf )
     return result;
 }
 
+/* node traversal functions */
 
 tNode * getKeyHash( tHash hash, tNode * root )
 {
@@ -336,10 +337,10 @@ tNode * getKeyPath( char * keyPath, tNode * root )
  * @param buf
  * @return
  */
-tNode * parseList( tBuffer * buf )
+tNode * parseList( tNode * node, tBuffer * buf )
 {
-    tNode   * result = NULL;
-    tNode   * node   = NULL;
+    tNode   * result;
+
     enum
     {
         outside,
@@ -357,6 +358,7 @@ tNode * parseList( tBuffer * buf )
 
     state       = outside;
     elementType = noElement;
+    result      = NULL;
 
     /* arrays can span lines, so ignore newlines */
     while ( (c = getNextChar( buf )) != EOF )
@@ -377,10 +379,7 @@ tNode * parseList( tBuffer * buf )
                 if ( elementType != noElement )
                 {
                     node = newNode( node );
-                    if ( result == NULL )
-                    {
-                        result = node;
-                    }
+                    if ( result == NULL ) { result = node; }
 
                     /* set the node */
                     switch ( elementType )
@@ -509,7 +508,8 @@ tNode * parseValue( tNode * node, tBuffer * buf )
 
         case '[':
             node->type = listNode;
-            node->list = parseList( buf );
+            node->list = parseList( node, buf );
+            node->next = NULL;
             return node;
 
         case '"':
@@ -538,7 +538,7 @@ tNode * parseChild( tNode * node, tBuffer * buf )
     getKey = 1;
     while ( (c = getNextChar( buf )) != EOF )
     {
-        //dumpMemory( (unsigned long)buf->ptr - 1, buf->ptr - 1, buf->length < 32 ? buf->length : 32);
+        // dumpMemory( (unsigned long)buf->ptr - 1, buf->ptr - 1, buf->length < 32 ? buf->length : 32);
 
         switch ( c )
         {
@@ -564,6 +564,7 @@ tNode * parseChild( tNode * node, tBuffer * buf )
         case '{':
             node->type  = childNode;
             node->child = parseChild( node, buf );
+            node->next  = NULL;
             break;
 
         case '}':
@@ -601,7 +602,7 @@ tNode * parseChild( tNode * node, tBuffer * buf )
 void parseMetadata( char * metadata, size_t length )
 {
     tNode * root;
-    //tNode * logicalVolume;
+    tNode * logicalVolume;
 
     DebugOut( "\n_______________________________\n\n" );
     fwrite( metadata, length, 1, stderr );
@@ -618,12 +619,14 @@ void parseMetadata( char * metadata, size_t length )
         root->type  = childNode;
         root->child = parseChild( root, buf );
 
+        DebugOut( "\n" );
         Log( LOG_DEBUG, "######## node dump ########\n" );
         dumpNodes( gRootNode, 0 );
 
-        //logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
+        logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
 
-        //Log( LOG_DEBUG, "######## kernel node ########\n" );
-        //dumpNodes( logicalVolume, 0 );
+        DebugOut( "\n" );
+        Log( LOG_DEBUG, "######## kernel node ########\n" );
+        dumpNodes( logicalVolume, 0 );
     }
 }
