@@ -44,6 +44,7 @@ extern void * gStackTop;
 /* used for indenting debug output */
 extern const char kIndent[];
 
-void dumpMemory(char * ptr, size_t length);
+void dumpMemory(unsigned long displayOffset, char * ptr, size_t length);
+//void dumpDisk(tDrive * drive, off64_t offset, size_t length);
 
 #endif //READLOGICALVOLUME_DEBUG_H

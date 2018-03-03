@@ -21,7 +21,7 @@ void * gStackTop;
  * @param ptr
  * @param length
  */
-void dumpMemory(char * ptr, size_t length)
+void dumpMemory(unsigned long displayOffset, char * ptr, size_t length)
 {
     if (isValidPtr(ptr))
     {
@@ -29,11 +29,11 @@ void dumpMemory(char * ptr, size_t length)
         {
             size_t rowLength = (kRowLength < length - i) ? kRowLength : length - i;
 
-            DebugOut("%p: ", &ptr[i]);
+            DebugOut("%08lx: ", displayOffset + i );
 
-            for (size_t j = 0; j < kRowLength; ++j)
+            for (size_t j = 0; j < rowLength; ++j)
             {
-                DebugOut("%02x ", ptr[i + j]);
+                DebugOut("%02x ", (unsigned char)ptr[i + j]);
             }
 
             DebugOut("   |");
@@ -56,35 +56,13 @@ void dumpMemory(char * ptr, size_t length)
  */
 void dumpDisk(tDrive * drive, off64_t offset, size_t length)
 {
-    char * ptr;
     char * block = calloc(length, 1);
     if ( isHeapPtr(block) )
     {
         ssize_t rdLen = readDrive(drive, offset, block, length);
         if (rdLen == (ssize_t)length)
         {
-            for (size_t i = 0; i < length; i += kRowLength )
-            {
-                size_t rowLength = (kRowLength < length - i) ? kRowLength : length - i;
-
-                DebugOut("%08lx: ", offset + i);
-
-                ptr = &block[i];
-                for (int j = 0; j < kRowLength; ++j)
-                {
-                    DebugOut( "%02x ", *ptr++);
-                }
-
-                ptr = &block[i];
-                DebugOut("   |");
-                for (size_t j = 0; j < rowLength; ++j)
-                {
-                    DebugOut( "%c", (isgraph(*ptr) || *ptr == ' ') ? *ptr : '.');
-                    ++ptr;
-                }
-
-                DebugOut("|\n");
-            }
+            dumpMemory( offset, block, length );
         }
         free(block);
     }

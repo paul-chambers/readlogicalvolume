@@ -14,13 +14,13 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-//#include <unistd.h>
+#include <unistd.h>
 #include <syslog.h>
-//#include <sys/file.h>
-//#include <errno.h>
+#include <sys/file.h>
+#include <errno.h>
 #include <string.h>
 #include <ctype.h>
-//#include <libgen.h>
+#include <libgen.h>
 #include <inttypes.h>
 #include <endian.h>
 
@@ -43,11 +43,11 @@ const char kIndent[] =
 
 typedef enum
 {
-    childNode,
+    childNode = 1,
     listNode,
     stringNode,
     integerNode
-}          tNodeType;
+} tNodeType;
 
 typedef struct tNode
 {
@@ -62,7 +62,7 @@ typedef struct tNode
         tStringZ     * string;
         int64_t      integer;
     };
-}          tNode;
+} tNode;
 
 static tNode * gRootNode = NULL;
 
@@ -72,7 +72,7 @@ typedef struct
     char   * start;
     char   * end;
     size_t length;
-}            tBuffer;
+} tBuffer;
 
 tBuffer * newBuffer( char * start, size_t length )
 {
@@ -88,63 +88,7 @@ tBuffer * newBuffer( char * start, size_t length )
     return result;
 }
 
-/* patterned after fgetc */
-int getNextChar( tBuffer * buf )
-{
-    int result = EOF;
-    if ( buf->length > 0 )
-    {
-        result = *buf->ptr++;
-        --buf->length;
-    }
-    return result;
-}
-
-int getPreviousChar( tBuffer * buf )
-{
-    int result = EOF;
-    if ( buf->length > 0 )
-    {
-        result = *(--buf->ptr);
-        ++buf->length;
-    }
-    return result;
-
-}
-
-void setStringStart( tBuffer * buf )
-{
-    buf->start = buf->ptr;
-}
-
-void setStringEnd( tBuffer * buf )
-{
-    buf->end = buf->ptr;
-}
-
-char * dupString( tBuffer * buf )
-{
-    char * result = NULL;
-
-    if ( (buf->end - buf->start) > 0 )
-    {
-        result = calloc( buf->end - buf->start + 1, 1 ); /* extra byte to guarantee a trailing null */
-        if ( isHeapPtr( result ) )
-        {
-#if 0
-            Log(LOG_DEBUG, "string:");
-            fprintf(stderr, "\"");
-            fwrite(buf->start, buf->end - buf->start - 1, 1, stderr);
-            fprintf(stderr, "\"\n");
-#endif
-            memcpy( result, buf->start, buf->end - buf->start - 1 );
-        }
-    }
-    else
-        Log( LOG_ERR, "string is less than one character in length (%p-%p)", buf->start, buf->end );
-
-    return result;
-}
+/***************************************************************/
 
 void dumpNodes( tNode * node, int depth );
 
@@ -223,12 +167,14 @@ void dumpNodes( tNode * node, int depth )
 #endif
 }
 
+/***************************************************************/
+
 tNode * newNode( tNode * node )
 {
     if ( isValidPtr( node ) )
     {
         node->next = calloc( sizeof( tNode ), 1 );
-        dumpNode( node, 0 );
+        // dumpNode( node, 0 );
         return isValidPtr( node->next ) ? node->next : node;
     }
     else
@@ -236,6 +182,70 @@ tNode * newNode( tNode * node )
         return calloc( sizeof( tNode ), 1 );
     }
 }
+
+/* patterned after fgetc */
+int getNextChar( tBuffer * buf )
+{
+    int result = EOF;
+
+    if ( buf->length > 0 )
+    {
+        result = *buf->ptr++;
+        --buf->length;
+    }
+    return result;
+}
+
+int getPreviousChar( tBuffer * buf )
+{
+    int result = EOF;
+
+    if ( buf->length > 0 )
+    {
+        result = *(--buf->ptr);
+        ++buf->length;
+    }
+    return result;
+
+}
+
+void setStringStart( tBuffer * buf )
+{
+    buf->start = buf->ptr;
+}
+
+void setStringEnd( tBuffer * buf )
+{
+    buf->end = buf->ptr - 1;
+}
+
+long lenString( tBuffer * buf )
+{
+    return (buf->end - buf->start);
+}
+
+char * dupString( tBuffer * buf )
+{
+    char * result = NULL;
+
+    if ( lenString( buf ) > 0 )
+    {
+        result = calloc( lenString( buf ) + 1, 1 ); /* extra byte to guarantee a trailing null */
+        if ( isHeapPtr( result ) )
+        {
+#if 0
+            Log(LOG_DEBUG, "string:");
+            fprintf(stderr, "\"");
+            fwrite(buf->start, buf->end - buf->start - 1, 1, stderr);
+            fprintf(stderr, "\"\n");
+#endif
+            memcpy( result, buf->start, lenString( buf ) );
+        }
+    }
+
+    return result;
+}
+
 
 tNode * getKeyHash( tHash hash, tNode * root )
 {
@@ -373,24 +383,25 @@ tNode * parseList( tBuffer * buf )
                     }
 
                     /* set the node */
-                    node->key  = "element";
-                    node->hash = hashString( node->key );
                     switch ( elementType )
                     {
                     case integerElement:
                         node->type    = integerNode;
                         node->integer = integer;
+                        node->key     = "integer";
                         break;
 
                     case stringElement:
                         node->type   = stringNode;
                         node->string = dupString( buf );
+                        node->key    = node->string;    /* makes it easier to test for presence of node */
                         break;
 
                     default:
                         /* just to keep the compiler happy */
                         break;
                     }
+                    node->hash = hashString( node->key );
                 }
 
                 if ( c == ']' )
@@ -524,29 +535,29 @@ tNode * parseChild( tNode * node, tBuffer * buf )
     tNode * result = NULL;
     int   getKey;
 
-    getKey     = 1;
+    getKey = 1;
     while ( (c = getNextChar( buf )) != EOF )
     {
-//        if (buf->length > 32)
-//            dumpMemory(buf->ptr - 1, 32);
+        //dumpMemory( (unsigned long)buf->ptr - 1, buf->ptr - 1, buf->length < 32 ? buf->length : 32);
 
         switch ( c )
         {
         case '#':
-            do
-            {
-                c = getNextChar( buf );
+            // dumpMemory( (unsigned long)buf->ptr, buf->ptr, buf->length < 96 ? buf->length : 96 );
+            setStringStart( buf );
+            do { c = getNextChar( buf ); } while ( c != EOF && c != '\n' );
+            setStringEnd( buf );
+            // Log(LOG_INFO, "comment: \"%s\"", dupString( buf ));
+            break;
 
-            } while ( c != EOF && c != '\n' );
-            getPreviousChar( buf );
-            /* ...and fall through */
-            __attribute__ ((fallthrough));
         case '\n':
+            do { c = getNextChar( buf ); } while ( c != EOF && (c == '\n' || c == '\t' || c == ' ') );
+            getPreviousChar( buf );
             getKey = 1;
             break;
 
         case '=':
-            /* parseValue figures out if it's a integer, string or array */
+            /* parseValue() figures out if it's a integer, string or list */
             node = parseValue( node, buf );
             break;
 
@@ -556,29 +567,31 @@ tNode * parseChild( tNode * node, tBuffer * buf )
             break;
 
         case '}':
-            Log( LOG_INFO, "child = %p", result );
             return result;
 
         default:
             if ( getKey )
             {
-                node = newNode( node );
-                if ( result == NULL )
-                {
-                    result = node;
-                }
-
                 getPreviousChar( buf );
                 setStringStart( buf );
-                do
-                {
+                do {
                     c = getNextChar( buf );
 
                 } while ( isalnum( c ) || c == '_' );
                 setStringEnd( buf );
 
-                node->key  = dupString( buf );
-                node->hash = hashString( node->key );
+                /* ignore zero-length keys, e.g. comment lines */
+                if ( lenString( buf ) > 0)
+                {
+                    node = newNode( node );
+                    if ( result == NULL )
+                    {
+                        result = node;
+                    }
+
+                    node->key  = dupString( buf );
+                    node->hash = hashString( node->key );
+                }
             }
         }
     }
@@ -588,7 +601,7 @@ tNode * parseChild( tNode * node, tBuffer * buf )
 void parseMetadata( char * metadata, size_t length )
 {
     tNode * root;
-    tNode * logicalVolume;
+    //tNode * logicalVolume;
 
     DebugOut( "\n_______________________________\n\n" );
     fwrite( metadata, length, 1, stderr );
@@ -599,18 +612,18 @@ void parseMetadata( char * metadata, size_t length )
     root = newNode( NULL );
     if ( isValidPtr( root ) )
     {
-        gRootNode = root;
+        gRootNode   = root;
         root->key   = "root_node";
         root->hash  = hashString( root->key );
         root->type  = childNode;
         root->child = parseChild( root, buf );
 
-        Log( LOG_DEBUG, "\n\n######## node dump ########\n" );
+        Log( LOG_DEBUG, "######## node dump ########\n" );
         dumpNodes( gRootNode, 0 );
 
-        logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
+        //logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
 
-        Log( LOG_DEBUG, "\n\n######## kernel node ########\n" );
-        dumpNodes( logicalVolume, 0 );
+        //Log( LOG_DEBUG, "######## kernel node ########\n" );
+        //dumpNodes( logicalVolume, 0 );
     }
 }
