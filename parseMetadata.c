@@ -14,382 +14,603 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
+//#include <unistd.h>
 #include <syslog.h>
-#include <sys/file.h>
-#include <errno.h>
+//#include <sys/file.h>
+//#include <errno.h>
 #include <string.h>
-#include <libgen.h>
+#include <ctype.h>
+//#include <libgen.h>
 #include <inttypes.h>
 #include <endian.h>
 
 #include "readlogicalvolume.h"
+#include "debug.h"
+#include "stringHash.h"
 #include "parseMetadata.h"
 
-typedef uint32_t tHash;
+const char kIndent[] =
+/*              12345678901234567890 */
+               "                    "
+               "                    "
+               "                    "
+               "                    "
+               "                    "
+               "                    "
+               "                    "
+               "                    "
+               "                    ";
 
-typedef enum {
-    unassignedNode = 0,
+typedef enum
+{
     childNode,
-    arrayNode,
+    listNode,
     stringNode,
-    numberNode
-} tNodeType;
+    integerNode
+}          tNodeType;
 
-typedef struct tNode {
-    struct tNode *next;
-    tHash       hash;
-    byte      * key;
-    tNodeType   type;
-    union {
+typedef struct tNode
+{
+    struct tNode * next;
+    tHash        hash;
+    tStringZ     * key;
+    tNodeType    type;
+    union
+    {
         struct tNode * child;
-        struct tNode * array;
-        byte         * string;
-        int64_t        number;
+        struct tNode * list;
+        tStringZ     * string;
+        int64_t      integer;
     };
-} tNode;
+}          tNode;
 
 static tNode * gRootNode = NULL;
 
-byte * copyToString(byte * start, size_t length)
+typedef struct
 {
-    byte * result = calloc(length + 1, 1); /* extra byte to guarantee a trailing null */
-    if (result != NULL && length > 0)
+    char   * ptr;
+    char   * start;
+    char   * end;
+    size_t length;
+}            tBuffer;
+
+tBuffer * newBuffer( char * start, size_t length )
+{
+    tBuffer * result;
+    result = calloc( sizeof( tBuffer ), 1 );
+    if ( isHeapPtr( result ) )
     {
-        memcpy(result, start, length);
+        result->ptr    = start;
+        result->start  = start;
+        result->end    = start;
+        result->length = length;
     }
     return result;
 }
 
-tHash hashString(byte *ptr, size_t len)
+/* patterned after fgetc */
+int getNextChar( tBuffer * buf )
 {
-    tHash hash = 199999; /* seed with largish prime */
-
-    for (int i = len; i > 0; --i)
+    int result = EOF;
+    if ( buf->length > 0 )
     {
-        /* The 'djb2' string hash function */
-        hash = (hash << 5) + hash + *ptr++;
+        result = *buf->ptr++;
+        --buf->length;
     }
-    return hash;
+    return result;
 }
 
-void setNodeKey(tNode * node, byte * keyStart, size_t length)
+int getPreviousChar( tBuffer * buf )
 {
-    node->key  = copyToString(keyStart, length);
-    node->hash = hashString(keyStart, length);
+    int result = EOF;
+    if ( buf->length > 0 )
+    {
+        result = *(--buf->ptr);
+        ++buf->length;
+    }
+    return result;
+
 }
 
-void dumpNodes(tNode * node, int depth);
+void setStringStart( tBuffer * buf )
+{
+    buf->start = buf->ptr;
+}
 
-void dumpNode(tNode * node, int depth)
+void setStringEnd( tBuffer * buf )
+{
+    buf->end = buf->ptr;
+}
+
+char * dupString( tBuffer * buf )
+{
+    char * result = NULL;
+
+    if ( (buf->end - buf->start) > 0 )
+    {
+        result = calloc( buf->end - buf->start + 1, 1 ); /* extra byte to guarantee a trailing null */
+        if ( isHeapPtr( result ) )
+        {
+#if 0
+            Log(LOG_DEBUG, "string:");
+            fprintf(stderr, "\"");
+            fwrite(buf->start, buf->end - buf->start - 1, 1, stderr);
+            fprintf(stderr, "\"\n");
+#endif
+            memcpy( result, buf->start, buf->end - buf->start - 1 );
+        }
+    }
+    else
+        Log( LOG_ERR, "string is less than one character in length (%p-%p)", buf->start, buf->end );
+
+    return result;
+}
+
+void dumpNodes( tNode * node, int depth );
+
+/**
+ *
+ * @param node
+ * @param depth
+ */
+void dumpNode( tNode * node, int depth )
 {
 #ifdef optDebugOutput
-    int i = sizeof(kIndent) - (depth * 4);
+    char scratch[256];
+    int i = sizeof( kIndent ) - (depth * 4) - 1;
 
-    Log(LOG_INFO, "%s node @ %p, next @ %p", &kIndent[i], node, node->next);
-    Log(LOG_INFO, "%s key = \"%s\" (hash %x)", &kIndent[i], node->key, node->hash );
-    switch (node->type)
+    if ( node != NULL )
     {
-    case childNode:
-        Log(LOG_INFO, "%s node type = child @ %p", &kIndent[i], node->child );
-        dumpNodes(node->child, depth + 1);
-        break;
+        switch ( node->type )
+        {
+        case childNode:
+            snprintf(scratch, sizeof(scratch), "child @ %p", node->child);
+            break;
 
-    case arrayNode:
-        Log(LOG_INFO, "%s node type = array", &kIndent[i] );
-        dumpNodes(node->array, depth + 1);
-        break;
+        case listNode:
+            snprintf(scratch, sizeof(scratch), "list @ %p", node->list);
+            break;
 
-    case stringNode:
-        Log(LOG_INFO, "%s node type = string \"%s\"", &kIndent[i], node->string );
-        break;
+        case stringNode:
+            snprintf(scratch, sizeof(scratch), "\"%s\"", node->string);
+            break;
 
-    case numberNode:
-        Log(LOG_INFO, "%s node type = number %lld", &kIndent[i], node->number );
-        break;
+        case integerNode:
+            snprintf(scratch, sizeof(scratch), "%ld", node->integer);
+            break;
 
-    default:
-        Log(LOG_INFO, "%s node type = unknown (%d)", &kIndent[i], node->type );
-        break;
+        default:
+            snprintf(scratch, sizeof(scratch), "unknown type (%d)", node->type);
+            break;
+        }
+        Log( LOG_INFO, "%s | node @ %10p, next @ %10p, (hash %016lx) \"%s\" = %s",
+             &kIndent[ i ], node, node->next, node->hash, node->key, scratch );
     }
-    DebugOut("\n");
+    else
+    {
+        Log( LOG_INFO, "%s node is (nil)", &kIndent[ i ] );
+    }
 #endif
 }
 
-void dumpNodes(tNode * node, int depth)
+/**
+ *
+ * @param node
+ * @param depth
+ */
+void dumpNodes( tNode * node, int depth )
 {
 #ifdef optDebugOutput
-    while (node != NULL)
+    while ( node != NULL )
     {
-        dumpNode(node, depth);
+        dumpNode( node, depth );
+        switch ( node->type )
+        {
+        case childNode:
+            dumpNodes( node->child, depth + 1 );
+            break;
+
+        case listNode:
+            dumpNodes( node->list, depth + 1 );
+            break;
+
+        default:
+            /* nothing needed for other types */
+            break;
+        }
         node = node->next;
     }
 #endif
 }
 
-
-tNode * parseArray(byte **ptr, size_t *length)
+tNode * newNode( tNode * node )
 {
-    tNode * result;
-    tNode * node;
-    tNode * previous;
-    enum { outsideString, insideString } state;
-    byte  * start;
-
-    state = outsideString;
-
-    result = NULL;
-    while (**ptr != '\n' && *length > 0)
+    if ( isValidPtr( node ) )
     {
-        DebugOut("%c", **ptr);
+        node->next = calloc( sizeof( tNode ), 1 );
+        dumpNode( node, 0 );
+        return isValidPtr( node->next ) ? node->next : node;
+    }
+    else
+    {
+        return calloc( sizeof( tNode ), 1 );
+    }
+}
 
-        switch (state)
+tNode * getKeyHash( tHash hash, tNode * root )
+{
+    tNode * node;
+    tNode * result;
+
+    node = root;
+    if ( node == NULL )
+    {
+        node = gRootNode;
+    }
+
+    while ( node != NULL && hash != node->hash )
+    {
+        switch ( node->type )
         {
-        case outsideString:
-            switch (**ptr)
+        case childNode:
+            if ( node->child != NULL )
+            {
+                result = getKeyHash( hash, node->child );
+                if ( result != NULL )
+                {
+                    return result;
+                }
+            }
+            break;
+
+        case listNode:
+            if ( node->list != NULL )
+            {
+                result = getKeyHash( hash, node->list );
+                if ( result != NULL )
+                {
+                    return result;
+                }
+            }
+            break;
+
+        default:
+            /* nothing needed for other types */
+            break;
+        }
+
+        node = node->next;
+    }
+    return node;
+}
+
+tNode * getKeyPath( char * keyPath, tNode * root )
+{
+    tNode      * result;
+    char * start;
+    char * end = keyPath;
+
+    result = root;
+    if ( result == NULL )
+    {
+        result = gRootNode;
+    }
+
+    if ( keyPath[ 0 ] == '/' )
+    {
+        result = gRootNode;
+        ++end;
+    }
+
+    while ( result != NULL && *end != '\0' )
+    {
+        start = end;
+        while ( *end != '/' && *end != '\0' )
+        {
+            ++end;
+        }
+        result = getKeyHash( hashBytes( start, end - start ), result );
+        if ( *end == '/' )
+        {
+            ++end;
+        }
+    }
+    return result;
+}
+
+/****************************************************************************/
+
+/**
+ *
+ * @param node
+ * @param buf
+ * @return
+ */
+tNode * parseList( tBuffer * buf )
+{
+    tNode   * result = NULL;
+    tNode   * node   = NULL;
+    enum
+    {
+        outside,
+        insideString,
+        insideInteger
+    }       state;
+    enum
+    {
+        noElement,
+        integerElement,
+        stringElement
+    }       elementType;
+    int64_t integer;
+    int     c;
+
+    state       = outside;
+    elementType = noElement;
+
+    /* arrays can span lines, so ignore newlines */
+    while ( (c = getNextChar( buf )) != EOF )
+    {
+        switch ( state )
+        {
+        case outside:
+            switch ( c )
             {
             case '"':
-                state = insideString;
-                start = *ptr + 1;
+                setStringStart( buf );
+                elementType = stringElement;
+                state       = insideString;
                 break;
 
             case ',':
-                Log(LOG_INFO, "array separator");
+            case ']':
+                if ( elementType != noElement )
+                {
+                    node = newNode( node );
+                    if ( result == NULL )
+                    {
+                        result = node;
+                    }
+
+                    /* set the node */
+                    node->key  = "element";
+                    node->hash = hashString( node->key );
+                    switch ( elementType )
+                    {
+                    case integerElement:
+                        node->type    = integerNode;
+                        node->integer = integer;
+                        break;
+
+                    case stringElement:
+                        node->type   = stringNode;
+                        node->string = dupString( buf );
+                        break;
+
+                    default:
+                        /* just to keep the compiler happy */
+                        break;
+                    }
+                }
+
+                if ( c == ']' )
+                {
+                    return result;
+                }
+
+                elementType = noElement;
                 break;
 
-            case ']':
-                Log(LOG_INFO, "array terminator");
-                return result;
+            default:
+                if ( isdigit( c ) )
+                {
+                    state       = insideInteger;
+                    elementType = integerElement;
+                    integer     = (c - '0');
+                }
+                break;
             }
             break;
 
         case insideString:
-            switch (**ptr)
+            if ( c == '"' )
             {
-            case '"':
-                state = outsideString;
-
-                if (result == NULL)
-                {
-                    result = calloc(sizeof(tNode), 1);
-                    previous = result;
-                    node     = result;
-                }
-                else
-                {
-                    node->next = calloc(sizeof(tNode), 1);
-                    previous = node;
-                    node     = node->next;
-                }
-
-                setNodeKey(node, start, *ptr - start);
-                node->type   = stringNode;
-                node->string = node->key;
-                break;
-
-            case '\\':
-                ++(*ptr);
-                --(*length);
-                break;
-            }
-            break;
-        }
-
-        ++(*ptr);
-        --(*length);
-    }
-}
-
-void parseValue(byte **ptr, size_t *length, tNode * node)
-{
-    byte  * start;
-    enum { outsideString, insideString } state;
-    int     digitsEnded;
-
-    while (**ptr != '\n' && *length > 0)
-    {
-        switch (node->type)
-        {
-        default:
-            switch (**ptr)
-            {
-            case ' ':
-            case '\t':
-                break;
-
-            case '[':
-                node->type = arrayNode;
-                break;
-
-            case '"':
-                node->type = stringNode;
-                start = *ptr + 1;
-                break;
-
-            default:
-                if (**ptr >= '0' && **ptr <= '9')
-                {
-                    digitsEnded  = 0;
-                    node->type   = numberNode;
-                    node->number = (**ptr - '0');
-                }
-                /* accumulate a number */
-                break;
+                setStringEnd( buf );
+                elementType = stringElement;
+                state       = outside;
             }
             break;
 
-        case arrayNode:
-            node->array = parseArray(ptr, length);
-            break;
-
-        case stringNode:
-            if (**ptr == '"')
+        case insideInteger:
+            if ( isdigit( c ) )
             {
-                node->string = copyToString(start, *ptr - start);
-            }
-            break;
-
-        case numberNode:
-            if (!digitsEnded && **ptr >= '0' && **ptr <= '9')
-            {
-                node->type   = numberNode;
-                node->number = (node->number * 10) + (**ptr - '0');
+                integer = (integer * 10) + (c - '0');
             }
             else
             {
-                digitsEnded = 1;
+                getPreviousChar( buf );
+                state = outside;
             }
             break;
         }
-        ++(*ptr);
-        --(*length);
     }
+    return result;
 }
 
-void parseNodes(byte **ptr, size_t *length, tNode *current)
+tNode * parseString( tNode * node, tBuffer * buf )
 {
-    enum    { endOfLine, isKey, isComment, isValue, isArray, isChild, endOfChild } state;
-    tNode   * previous;
-    byte    * kStart;
-    byte    * kEnd;
+    int c;
 
-    current->type  = childNode;
-    current->child = calloc(sizeof(tNode), 1);
-    previous = current;
-    current = current->child;
-
-    state = endOfLine;
-    while ( *length > 0 )
+    setStringStart( buf );
+    do
     {
-        /* state-based processing */
-        switch (state)
+        c = getNextChar( buf );
+
+    } while ( c != EOF && c != '"' );
+    setStringEnd( buf );
+
+    node->type   = stringNode;
+    node->string = dupString( buf );
+
+    return node;
+}
+
+tNode * parseInteger( tNode * node, tBuffer * buf )
+{
+    int64_t integer = 0;
+    int     c;
+
+    while ( (c = getNextChar( buf )) != EOF )
+    {
+        if ( isdigit( c ) )
         {
-        case endOfLine:
-            /* each line begins with a key */
-            kStart = NULL;
-            state  = isKey;
-            break;
-
-        case isComment:
-            while (**ptr != '\n' && *length > 0)
-            {
-                ++(*ptr);
-                --(*length);
-            }
-            state = endOfLine;
-            break;
-
-        case isValue:
-            setNodeKey(current, kStart, kEnd - kStart + 1);
-
-            parseValue( ptr, length, current );
-
-            current->next = calloc(sizeof(tNode), 1);
-            previous = current;
-            current = current->next;
-            break;
-
-        case isChild:
-            current->type = childNode;
-            setNodeKey(current, kStart, kEnd - kStart + 1);
-
-            parseNodes( ptr, length, current );
-
-            current->next = calloc(sizeof(tNode), 1);
-            previous = current;
-            current = current->next;
-            break;
-
-        case endOfChild:
-            /* discard the empty node at the end */
-            previous->next = NULL;
-            free(current);
-            return;
+            integer = (integer * 10) + (c - '0');
         }
+        else
+        {
+            // fprintf(stderr, "\ninteger: %lld\n", integer);
+            getPreviousChar( buf );
+            break;
+        }
+    }
+    node->type    = integerNode;
+    node->integer = integer;
 
-        switch (**ptr)
+    return node;
+}
+
+tNode * parseValue( tNode * node, tBuffer * buf )
+{
+    int c;
+
+    while ( (c = getNextChar( buf )) != EOF )
+    {
+        switch ( c )
         {
         case ' ':
         case '\t':
-            /* ignore whitespace */
+            /* skip whitespace */
             break;
 
         case '\n':
-            state = endOfLine;
-            break;
+            getPreviousChar( buf );
+            return node;
 
-            /* if we hit a comment, consume up to next newline */
-        case '#':
-            state = isComment;
-            break;
+        case '[':
+            node->type = listNode;
+            node->list = parseList( buf );
+            return node;
 
-        case '=':
-            state = isValue;
-            break;
-
-        case '{':
-            state = isChild;
-            break;
-
-        case '}':
-            state = endOfChild;
-            break; /* back to the parent */
+        case '"':
+            return parseString( node, buf );
 
         default:
-            if (state == isKey)
+            if ( isdigit( c ) )
             {
-                /* everything else is part of the key */
-                if (kStart == NULL)
-                {
-                    kStart = *ptr;
-                }
-                kEnd = *ptr;
+                /* back up one character, otherwise we strip the first digit */
+                getPreviousChar( buf );
+
+                return parseInteger( node, buf );
             }
             break;
         }
-
-        ++(*ptr);
-        --(*length);
     }
+    return node;
 }
 
+tNode * parseChild( tNode * node, tBuffer * buf )
+{
+    int   c;
+    tNode * result = NULL;
+    int   getKey;
 
-void parseMetadata(byte *metadata, size_t length)
+    getKey     = 1;
+    while ( (c = getNextChar( buf )) != EOF )
+    {
+//        if (buf->length > 32)
+//            dumpMemory(buf->ptr - 1, 32);
+
+        switch ( c )
+        {
+        case '#':
+            do
+            {
+                c = getNextChar( buf );
+
+            } while ( c != EOF && c != '\n' );
+            getPreviousChar( buf );
+            /* ...and fall through */
+            __attribute__ ((fallthrough));
+        case '\n':
+            getKey = 1;
+            break;
+
+        case '=':
+            /* parseValue figures out if it's a integer, string or array */
+            node = parseValue( node, buf );
+            break;
+
+        case '{':
+            node->type  = childNode;
+            node->child = parseChild( node, buf );
+            break;
+
+        case '}':
+            Log( LOG_INFO, "child = %p", result );
+            return result;
+
+        default:
+            if ( getKey )
+            {
+                node = newNode( node );
+                if ( result == NULL )
+                {
+                    result = node;
+                }
+
+                getPreviousChar( buf );
+                setStringStart( buf );
+                do
+                {
+                    c = getNextChar( buf );
+
+                } while ( isalnum( c ) || c == '_' );
+                setStringEnd( buf );
+
+                node->key  = dupString( buf );
+                node->hash = hashString( node->key );
+            }
+        }
+    }
+    return (result);
+}
+
+void parseMetadata( char * metadata, size_t length )
 {
     tNode * root;
+    tNode * logicalVolume;
 
-    DebugOut("\n_______________________________\n\n");
-    DebugOut("%s", metadata);
-    DebugOut("\n_______________________________\n\n");
+    DebugOut( "\n_______________________________\n\n" );
+    fwrite( metadata, length, 1, stderr );
+    DebugOut( "\n_______________________________\n\n" );
 
-    root = calloc(sizeof(tNode), 1);
-    if (root != NULL)
+    tBuffer * buf = newBuffer( metadata, length );
+
+    root = newNode( NULL );
+    if ( isValidPtr( root ) )
     {
         gRootNode = root;
-        setNodeKey(root, "root node", 9);
-        parseNodes(&metadata, &length, root);
+        root->key   = "root_node";
+        root->hash  = hashString( root->key );
+        root->type  = childNode;
+        root->child = parseChild( root, buf );
 
-        Log(LOG_DEBUG,"######## node dump ########\n");
-        dumpNodes(gRootNode,0);
+        Log( LOG_DEBUG, "\n\n######## node dump ########\n" );
+        dumpNodes( gRootNode, 0 );
+
+        logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
+
+        Log( LOG_DEBUG, "\n\n######## kernel node ########\n" );
+        dumpNodes( logicalVolume, 0 );
     }
 }

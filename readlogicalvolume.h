@@ -6,20 +6,7 @@
 #define READLOGICALVOLUME_H
 
 typedef unsigned char byte;
+typedef char tStringZ;    // zero-terminated string/char pointer
 
-#define optDebugOutput
-
-#ifdef  optDebugOutput
-#define Log( level, msg, ... )   \
-        fprintf( stderr, "### %20s [%3d] " msg "\n", __func__, __LINE__, ##__VA_ARGS__ )
-#define DebugOut( msg, ... ) \
-        fprintf(stderr, msg, ##__VA_ARGS__)
-#else
-#define Log( level, msg, ... )
-#define DebugOut( msg, ... )
-#endif
-
-/* used for indenting debug output */
-static const char kIndent[] = "                                                                          ";
 
 #endif //READLOGICALVOLUME_H

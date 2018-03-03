@@ -5,6 +5,6 @@
 #ifndef READLOGICALVOLUME_PARSEMETADATA_H
 #define READLOGICALVOLUME_PARSEMETADATA_H
 
-void parseMetadata( byte *metadata, size_t length );
+void parseMetadata( char * metadata, size_t length );
 
 #endif //READLOGICALVOLUME_PARSEMETADATA_H

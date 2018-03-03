@@ -16,6 +16,7 @@
 #include <endian.h>
 
 #include "readlogicalvolume.h"
+#include "debug.h"
 #include "readaccess.h"
 
 /*********************************************************************************************
@@ -60,17 +61,17 @@ ssize_t readDrive( tDrive * drive, off64_t offset, void * dest, size_t length )
 {
     ssize_t result = 0;
 
-    Log(LOG_DEBUG,"ofst:%8llx len:%8llx", offset, length);
+    Log(LOG_DEBUG,"ofst:%8lx len:%8lx", offset, length);
     if (drive != NULL)
     {
         if (lseek64(drive->id, offset, SEEK_SET) < 0)
         {
-            Log(LOG_ERR, "seek to offset %ll failed (%d: %s)", offset, errno, strerror(errno));
+            Log(LOG_ERR, "seek to offset %lu failed (%d: %s)", offset, errno, strerror(errno));
         }
         else {
             result = read(drive->id, dest, length);
             if (result < 0) {
-                Log(LOG_ERR, "read @ offset %ll for %ll bytes failed (%d: %s)\n",
+                Log(LOG_ERR, "read @ offset %lu for %lu bytes failed (%d: %s)\n",
                     offset, length, errno, strerror(errno));
             }
         }
