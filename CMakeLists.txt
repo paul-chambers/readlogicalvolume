@@ -6,7 +6,9 @@ set(CMAKE_C_FLAGS "-Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS_DEBUG -fsanitize=address)
 
 include_directories(.)
-include_directories( SYSTEM /usr/include )
+IF (WIN32)
+include_directories( SYSTEM ../usr/include )
+ENDIF()
 
 add_executable( readlogicalvolume
                 readlogicalvolume.c readlogicalvolume.h

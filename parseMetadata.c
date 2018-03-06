@@ -90,82 +90,6 @@ tBuffer * newBuffer( char * start, size_t length )
 
 /***************************************************************/
 
-void dumpNodes( tNode * node, int depth );
-
-/**
- *
- * @param node
- * @param depth
- */
-void dumpNode( tNode * node, int depth )
-{
-#ifdef optDebugOutput
-    char scratch[256];
-    int i = sizeof( kIndent ) - (depth * 4) - 1;
-
-    if ( node != NULL )
-    {
-        switch ( node->type )
-        {
-        case childNode:
-            snprintf(scratch, sizeof(scratch), "child @ %p", node->child);
-            break;
-
-        case listNode:
-            snprintf(scratch, sizeof(scratch), "list @ %p", node->list);
-            break;
-
-        case stringNode:
-            snprintf(scratch, sizeof(scratch), "\"%s\"", node->string);
-            break;
-
-        case integerNode:
-            snprintf(scratch, sizeof(scratch), "%ld", node->integer);
-            break;
-
-        default:
-            snprintf(scratch, sizeof(scratch), "unknown type (%d)", node->type);
-            break;
-        }
-        Log( LOG_INFO, "%s | node @ %10p, next @ %10p, (hash %016lx) \"%s\" = %s",
-             &kIndent[ i ], node, node->next, node->hash, node->key, scratch );
-    }
-    else
-    {
-        Log( LOG_INFO, "%s node is (nil)", &kIndent[ i ] );
-    }
-#endif
-}
-
-/**
- *
- * @param node
- * @param depth
- */
-void dumpNodes( tNode * node, int depth )
-{
-#ifdef optDebugOutput
-    while ( node != NULL )
-    {
-        dumpNode( node, depth );
-        switch ( node->type )
-        {
-        case childNode:
-            dumpNodes( node->child, depth + 1 );
-            break;
-
-        case listNode:
-            dumpNodes( node->list, depth + 1 );
-            break;
-
-        default:
-            /* nothing needed for other types */
-            break;
-        }
-        node = node->next;
-    }
-#endif
-}
 
 /***************************************************************/
 
@@ -248,10 +172,124 @@ char * dupString( tBuffer * buf )
 
 /* node traversal functions */
 
+/**
+   callback that can be invoked for the root node provided, and each node below it
+ */
+typedef tNode * (*tNodeCallback)( tNode * node, int depth, int index, void * cbData );
+
+/**
+ * recursive inner function used by forEachNode() to traverse the node tree
+ * invokes the callback on each node, depth-first, with some context, until
+ * the callback returns something other than NULL, which is then returned.
+ *
+ * @param node      the starting point
+ * @param depth     how many levels down we've recursed
+ * @param callback  callback that is passed the current node and some context
+ * @param cbData    opaque pointer passed through to callback for its use
+ * @return either NULL, or an non-null value returned by the callback function
+ */
+tNode * forEachNodeRecurse( tNode * node, int depth, tNodeCallback callback, void * cbData )
+{
+    tNode * result;
+    tNode * child;
+    int     index = 0;
+
+    while ( node != NULL )
+    {
+        result = (*callback)( node, depth, index, cbData );
+
+        if (result != NULL )
+        {
+            /* unwind */
+            return result;
+        }
+
+        switch ( node->type )
+        {
+        case childNode:
+            child = node->child;
+            break;
+
+        case listNode:
+            child = node->list;
+            break;
+
+        default:
+            /* no recursion needed for other types */
+            child = NULL;
+            break;
+        }
+
+        if ( child != NULL )
+        {
+            result = forEachNodeRecurse( child, depth + 1, callback, cbData );
+            if ( result != NULL )
+            {
+                return result;
+            }
+        }
+
+        node = node->next;
+        ++index;
+    }
+
+    return node;
+}
+
+
+/**
+ * invokes a callback on the root node provided, and each node below it, until
+ * the callback returns something other than NULL, which is then returned.
+ *
+ * @param node      the starting point
+ * @param depth     how many levels down we've recursed
+ * @param callback  callback that is passed the current node and some context
+ * @param cbData    opaque pointer passed through to callback for its use
+ * @return either NULL, or an non-null value returned by the callback function
+ */
+
+tNode * forEachNode( tNode * root, tNodeCallback callback, void * cbData )
+{
+    tNode * result;
+
+    if ( root == NULL )
+    {
+        root = gRootNode;
+    }
+
+    /* process the root node first */
+    result = (*callback)( root, 0, 0, cbData );
+    if (result == NULL)
+    {
+        switch (root->type)
+        {
+        case listNode:
+            result = forEachNodeRecurse( root->list, 1, callback, cbData );
+            break;
+
+        case childNode:
+            result = forEachNodeRecurse( root->child, 1, callback, cbData );
+            break;
+
+        default:
+            break;
+        }
+    }
+    return result;
+}
+
+tNode * hashMatchCallback(tNode * node, int UNUSED(depth), int UNUSED(index), void * cbData)
+{
+    if (node->hash == (tHash)cbData)
+    {
+        return node;
+    }
+    return NULL;
+}
+
 tNode * getKeyHash( tHash hash, tNode * root )
 {
     tNode * node;
-    tNode * result;
 
     node = root;
     if ( node == NULL )
@@ -259,40 +297,7 @@ tNode * getKeyHash( tHash hash, tNode * root )
         node = gRootNode;
     }
 
-    while ( node != NULL && hash != node->hash )
-    {
-        switch ( node->type )
-        {
-        case childNode:
-            if ( node->child != NULL )
-            {
-                result = getKeyHash( hash, node->child );
-                if ( result != NULL )
-                {
-                    return result;
-                }
-            }
-            break;
-
-        case listNode:
-            if ( node->list != NULL )
-            {
-                result = getKeyHash( hash, node->list );
-                if ( result != NULL )
-                {
-                    return result;
-                }
-            }
-            break;
-
-        default:
-            /* nothing needed for other types */
-            break;
-        }
-
-        node = node->next;
-    }
-    return node;
+    return forEachNode( node, hashMatchCallback, (void *)hash );
 }
 
 tNode * getKeyPath( char * keyPath, tNode * root )
@@ -327,6 +332,71 @@ tNode * getKeyPath( char * keyPath, tNode * root )
         }
     }
     return result;
+}
+
+/**
+ *
+ * @param node
+ * @param depth
+ */
+void dumpNode( tNode * node, int depth )
+{
+#ifdef optDebugOutput
+    char scratch[256];
+    int i = sizeof( kIndent ) - (depth * 4) - 1;
+
+    if ( node != NULL )
+    {
+        switch ( node->type )
+        {
+        case childNode:
+            snprintf(scratch, sizeof(scratch), "child @ %p", node->child);
+            break;
+
+        case listNode:
+            snprintf(scratch, sizeof(scratch), "list @ %p", node->list);
+            break;
+
+        case stringNode:
+            snprintf(scratch, sizeof(scratch), "\"%s\"", node->string);
+            break;
+
+        case integerNode:
+            snprintf(scratch, sizeof(scratch), "%ld", node->integer);
+            break;
+
+        default:
+            snprintf(scratch, sizeof(scratch), "unknown type (%d)", node->type);
+            break;
+        }
+        Log( LOG_INFO, "%s | node @ %10p, next @ %10p, (hash %016lx) \"%s\" = %s",
+             &kIndent[ i ], node, node->next, node->hash, node->key, scratch );
+    }
+    else
+    {
+        Log( LOG_INFO, "%s node is (nil)", &kIndent[ i ] );
+    }
+#endif
+}
+
+#ifdef optDebugOutput
+tNode * dumpNodeCallback( tNode * node, int depth, int UNUSED(index), void * UNUSED(cbData) )
+{
+    dumpNode( node, depth );
+    return NULL;
+}
+#endif
+
+/**
+ *
+ * @param node
+ * @param depth
+ */
+void dumpNodeTree( tNode * node )
+{
+#ifdef optDebugOutput
+    forEachNode( node, dumpNodeCallback, NULL );
+#endif
 }
 
 /****************************************************************************/
@@ -618,15 +688,16 @@ void parseMetadata( char * metadata, size_t length )
         root->hash  = hashString( root->key );
         root->type  = childNode;
         root->child = parseChild( root, buf );
+        root->next  = NULL;
 
         DebugOut( "\n" );
         Log( LOG_DEBUG, "######## node dump ########\n" );
-        dumpNodes( gRootNode, 0 );
+        dumpNodeTree( gRootNode );
 
         logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
 
         DebugOut( "\n" );
         Log( LOG_DEBUG, "######## kernel node ########\n" );
-        dumpNodes( logicalVolume, 0 );
+        dumpNodeTree( logicalVolume );
     }
 }
