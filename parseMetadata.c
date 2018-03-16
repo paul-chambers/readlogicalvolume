@@ -15,17 +15,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <syslog.h>
-#include <sys/file.h>
+#include <fcntl.h>
 #include <errno.h>
+#include <syslog.h>
 #include <string.h>
 #include <ctype.h>
-#include <libgen.h>
 #include <inttypes.h>
 #include <endian.h>
 
 #include "readlogicalvolume.h"
 #include "debug.h"
+#include "readaccess.h"
 #include "stringHash.h"
 #include "parseMetadata.h"
 
@@ -41,55 +41,20 @@ const char kIndent[] =
                "                    "
                "                    ";
 
-typedef enum
-{
-    childNode = 1,
-    listNode,
-    stringNode,
-    integerNode
-} tNodeType;
 
-typedef struct tNode
+tTextBlock * newBuffer( byte * start, size_t length )
 {
-    struct tNode * next;
-    tHash        hash;
-    tStringZ     * key;
-    tNodeType    type;
-    union
-    {
-        struct tNode * child;
-        struct tNode * list;
-        tStringZ     * string;
-        int64_t      integer;
-    };
-} tNode;
-
-static tNode * gRootNode = NULL;
-
-typedef struct
-{
-    char   * ptr;
-    char   * start;
-    char   * end;
-    size_t length;
-} tBuffer;
-
-tBuffer * newBuffer( char * start, size_t length )
-{
-    tBuffer * result;
-    result = calloc( sizeof( tBuffer ), 1 );
+    tTextBlock * result;
+    result = calloc( sizeof( tTextBlock ), 1 );
     if ( isHeapPtr( result ) )
     {
-        result->ptr    = start;
-        result->start  = start;
-        result->end    = start;
-        result->length = length;
+        result->block.ptr    = start;
+        result->block.length = length;
+        result->start        = start;
+        result->end          = start;
     }
     return result;
 }
-
-/***************************************************************/
-
 
 /***************************************************************/
 
@@ -108,47 +73,47 @@ tNode * newNode( tNode * node )
 }
 
 /* patterned after fgetc */
-int getNextChar( tBuffer * buf )
+int getNextChar( tTextBlock * buf )
 {
     int result = EOF;
 
-    if ( buf->length > 0 )
+    if ( buf->block.length > 0 )
     {
-        result = *buf->ptr++;
-        --buf->length;
+        result = *buf->block.ptr++;
+        --buf->block.length;
     }
     return result;
 }
 
-int getPreviousChar( tBuffer * buf )
+int getPreviousChar( tTextBlock * buf )
 {
     int result = EOF;
 
-    if ( buf->length > 0 )
+    if ( buf->block.length > 0 )
     {
-        result = *(--buf->ptr);
-        ++buf->length;
+        result = *(--buf->block.ptr);
+        ++buf->block.length;
     }
     return result;
 
 }
 
-void setStringStart( tBuffer * buf )
+void setStringStart( tTextBlock * buf )
 {
-    buf->start = buf->ptr;
+    buf->start = buf->block.ptr;
 }
 
-void setStringEnd( tBuffer * buf )
+void setStringEnd( tTextBlock * buf )
 {
-    buf->end = buf->ptr - 1;
+    buf->end = buf->block.ptr - 1;
 }
 
-long lenString( tBuffer * buf )
+long lenString( tTextBlock * buf )
 {
     return (buf->end - buf->start);
 }
 
-char * dupString( tBuffer * buf )
+char * dupString( tTextBlock * buf )
 {
     char * result = NULL;
 
@@ -252,11 +217,6 @@ tNode * forEachNode( tNode * root, tNodeCallback callback, void * cbData )
 {
     tNode * result;
 
-    if ( root == NULL )
-    {
-        root = gRootNode;
-    }
-
     /* process the root node first */
     result = (*callback)( root, 0, 0, cbData );
     if (result == NULL)
@@ -289,32 +249,19 @@ tNode * hashMatchCallback(tNode * node, int UNUSED(depth), int UNUSED(index), vo
 
 tNode * getKeyHash( tHash hash, tNode * root )
 {
-    tNode * node;
-
-    node = root;
-    if ( node == NULL )
-    {
-        node = gRootNode;
-    }
-
-    return forEachNode( node, hashMatchCallback, (void *)hash );
+    return forEachNode( root, hashMatchCallback, (void *)hash );
 }
 
-tNode * getKeyPath( char * keyPath, tNode * root )
+tNode * getKeyPath( const char * keyPath, tNode * root )
 {
-    tNode      * result;
-    char * start;
-    char * end = keyPath;
+    tNode * result;
+    const char  * start;
+    const char  * end = keyPath;
 
     result = root;
-    if ( result == NULL )
-    {
-        result = gRootNode;
-    }
 
     if ( keyPath[ 0 ] == '/' )
     {
-        result = gRootNode;
         ++end;
     }
 
@@ -332,6 +279,39 @@ tNode * getKeyPath( char * keyPath, tNode * root )
         }
     }
     return result;
+}
+
+
+void dumpPhysicalVolume( tPhysicalVolume * pv )
+{
+    Log( LOG_INFO, "pv @ %p, next @ %p", pv, pv->next );
+    Log( LOG_INFO, "      drive @ %p",   pv->drive );
+    Log( LOG_INFO, "       name = \"%s\"",  pv->name );
+    Log( LOG_INFO, "         id = \"%s\"",  pv->id  );
+    Log( LOG_INFO, "        dev = \"%s\"",  pv->dev );
+    Log( LOG_INFO, " extentSize = %ld", pv->extentSize );
+    Log( LOG_INFO, "    devSize = %ld", pv->devSize );
+    Log( LOG_INFO, "    peStart = %ld", pv->peStart );
+    Log( LOG_INFO, "    peCount = %ld", pv->peCount );
+}
+
+void dumpSegment( tLogicalVolumeSegment * segment )
+{
+#ifdef optDebugOutput
+    Log( LOG_INFO, "  start extent = %ld", segment->startExtent );
+    Log( LOG_INFO, "  extent count = %ld", segment->extentCount );
+    Log( LOG_INFO, "  stripe count = %ld", segment->stripeCount );
+    Log( LOG_INFO, "  stripes @ %p",  segment->stripes );
+    for ( int j = 0; j < segment->stripeCount; ++j )
+    {
+        Log( LOG_INFO, "    stripe[%d]         pvName = \"%s\"", j, segment->stripes[j].pvName );
+        Log( LOG_INFO, "    stripe[%d] physicalVolume @ %p \"%s\"",
+             j,
+             segment->stripes[j].physicalVolume,
+             segment->stripes[j].physicalVolume->name );
+        Log( LOG_INFO, "    stripe[%d]   start extent = %ld",    j, segment->stripes[j].startExtent );
+    }
+#endif
 }
 
 /**
@@ -399,6 +379,22 @@ void dumpNodeTree( tNode * node )
 #endif
 }
 
+void dumpMemoryBuffer( tMemoryBuffer * buffer, const char * lvName )
+{
+    char filename[256];
+    snprintf( filename, sizeof( filename ), "%s.bin", lvName );
+    int fd = creat( filename, S_IRUSR | S_IRGRP );
+    if ( fd == -1 )
+    {
+        Log( LOG_ERR, "unable to open file \"%s\" (%d: %s)", filename, errno, strerror( errno ) );
+    }
+    else
+    {
+        write( fd, buffer->start, buffer->length );
+        close( fd );
+    }
+}
+
 /****************************************************************************/
 
 /**
@@ -407,7 +403,7 @@ void dumpNodeTree( tNode * node )
  * @param buf
  * @return
  */
-tNode * parseList( tNode * node, tBuffer * buf )
+tNode * parseList( tNode * node, tTextBlock * buf )
 {
     tNode   * result;
 
@@ -417,12 +413,14 @@ tNode * parseList( tNode * node, tBuffer * buf )
         insideString,
         insideInteger
     }       state;
+
     enum
     {
         noElement,
         integerElement,
         stringElement
     }       elementType;
+
     int64_t integer;
     int     c;
 
@@ -517,7 +515,7 @@ tNode * parseList( tNode * node, tBuffer * buf )
     return result;
 }
 
-tNode * parseString( tNode * node, tBuffer * buf )
+tNode * parseString( tNode * node, tTextBlock * buf )
 {
     int c;
 
@@ -535,7 +533,7 @@ tNode * parseString( tNode * node, tBuffer * buf )
     return node;
 }
 
-tNode * parseInteger( tNode * node, tBuffer * buf )
+tNode * parseInteger( tNode * node, tTextBlock * buf )
 {
     int64_t integer = 0;
     int     c;
@@ -559,7 +557,7 @@ tNode * parseInteger( tNode * node, tBuffer * buf )
     return node;
 }
 
-tNode * parseValue( tNode * node, tBuffer * buf )
+tNode * parseValue( tNode * node, tTextBlock * buf )
 {
     int c;
 
@@ -599,11 +597,11 @@ tNode * parseValue( tNode * node, tBuffer * buf )
     return node;
 }
 
-tNode * parseChild( tNode * node, tBuffer * buf )
+tNode * parseChild( tNode * node, tTextBlock * buf )
 {
-    int   c;
     tNode * result = NULL;
-    int   getKey;
+    int     getKey;
+    int     c;
 
     getKey = 1;
     while ( (c = getNextChar( buf )) != EOF )
@@ -669,35 +667,314 @@ tNode * parseChild( tNode * node, tBuffer * buf )
     return (result);
 }
 
-void parseMetadata( char * metadata, size_t length )
+
+tNode * parseMetadata( tTextBlock * metadata )
 {
     tNode * root;
-    tNode * logicalVolume;
-
-    DebugOut( "\n_______________________________\n\n" );
-    fwrite( metadata, length, 1, stderr );
-    DebugOut( "\n_______________________________\n\n" );
-
-    tBuffer * buf = newBuffer( metadata, length );
 
     root = newNode( NULL );
     if ( isValidPtr( root ) )
     {
-        gRootNode   = root;
         root->key   = "root_node";
         root->hash  = hashString( root->key );
         root->type  = childNode;
-        root->child = parseChild( root, buf );
+        root->child = parseChild( root, metadata );
         root->next  = NULL;
 
         DebugOut( "\n" );
         Log( LOG_DEBUG, "######## node dump ########\n" );
-        dumpNodeTree( gRootNode );
-
-        logicalVolume = getKeyPath( "logical_volumes/kernel", NULL );
-
-        DebugOut( "\n" );
-        Log( LOG_DEBUG, "######## kernel node ########\n" );
-        dumpNodeTree( logicalVolume );
+        dumpNodeTree( root );
     }
+    return root;
+}
+
+
+#define kHash_id        0x000000000cfb66ec
+#define kHash_device    0x0000eaeb4d97cacf
+#define kHash_dev_size  0x03e752f51209acb8
+#define kHash_pe_start  0x03e7536bf0e35441
+#define kHash_pe_count  0x03e7536befbf62dc
+
+/**
+ *
+ * @param node
+ * @param depth
+ * @param index
+ * @param cbData
+ * @return
+ */
+tNode *physVolCallback( tNode * node, int depth, int index, void * cbData )
+{
+    tPhysicalVolume * pv = (tPhysicalVolume *)cbData;
+
+    switch (depth)
+    {
+    case 1:
+        if (index == 0)
+        {
+            if ( node->type == childNode )
+            {
+                pv->name = strdup( node->key );
+            }
+        }
+        else
+        {
+            /** @todo handle multiple physical volumes */
+            Log(LOG_ERR,"multiple physical volumes - not currently supported");
+        }
+        break;
+
+    case 2:
+        switch (node->hash )
+        {
+        case kHash_id:
+            if (node->type == stringNode)
+            {
+                pv->id = strdup( node->string );
+            }
+            break;
+
+        case kHash_device:
+            if (node->type == stringNode)
+            {
+                pv->dev = strdup( node->string );
+            }
+            break;
+
+        case kHash_dev_size:
+            if (node->type == integerNode)
+            {
+                pv->devSize = node->integer;
+            }
+            break;
+
+        case kHash_pe_start:
+            if (node->type == integerNode)
+            {
+                pv->peStart = node->integer;
+            }
+            break;
+
+        case kHash_pe_count:
+            if (node->type == integerNode)
+            {
+                pv->peCount = node->integer;
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
+    return NULL;
+}
+
+
+/* depth = 1 */
+#define kHash_segment_count 0x69d828731cbe319a
+/* depth = 2 */
+#define kHash_start_extent  0x8766b8e0de292584
+#define kHash_extent_count  0x7dadb102604275ff
+#define kHash_type          0x0000003739774241
+#define kHash_stripe_count  0x87697ace17d5787e
+#define kHash_stripes       0x001e4859a5efeb29
+/* depth = 3 */
+/* stripe pairs themselves: (physical volume name, starting extent) */
+
+/**
+ *
+ * @param node
+ * @param depth
+ * @param index
+ * @param cbData
+ * @return
+ */
+
+tNode * logVolCallback( tNode * node, int depth, int index, void * cbData )
+{
+    static int seg;
+    static int stripeCount;
+    tLogicalVolumeSegment * segment = (tLogicalVolumeSegment *)cbData;
+
+    switch (depth)
+    {
+    case 1: /* is it a segment? which one? */
+        if (memcmp(node->key, "segment", 7) == 0
+            && node->type == childNode)
+        {
+            seg = atoi(&node->key[7]) - 1;
+        }
+        else seg = 0;
+        break;
+
+    case 2: /* attributes of this segment */
+        if (seg >= 0)
+        {
+            switch ( node->hash )
+            {
+            case kHash_start_extent:
+                if ( node->type == integerNode )
+                {
+                    segment[ seg ].startExtent = node->integer;
+                }
+                break;
+
+            case kHash_extent_count:
+                if ( node->type == integerNode )
+                {
+                    segment[ seg ].extentCount = node->integer;
+                }
+                break;
+
+            case kHash_stripe_count:
+                if ( node->type == integerNode )
+                {
+                    stripeCount = node->integer;
+                    segment[ seg ].stripeCount = stripeCount;
+                    segment[ seg ].stripes = calloc( sizeof(tStripe), stripeCount );
+                }
+                break;
+            }
+        }
+        break;
+
+    case 3: /* array of stripes (usually 1 stripe) */
+        if ( (index & 1) == 0 )
+        {
+            if ( node->type == stringNode )
+            {
+                segment[ seg ].stripes[ index / 2 ].pvName = strdup( node->string );
+            }
+        }
+        else
+        {
+            /* starting extent */
+            if ( node->type == integerNode )
+            {
+                if ( index / 2 < stripeCount )
+                {
+                    segment[ seg ].stripes[ index / 2 ].startExtent = node->integer;
+                }
+            }
+        }
+        break;
+    }
+    return NULL;
+}
+
+tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * root )
+{
+    tPhysicalVolume * physicalVolume;
+    tLogicalVolumeSegment * segments;
+
+    physicalVolume = calloc( sizeof(tPhysicalVolume),1 );
+    physicalVolume->drive = drive;
+
+    tNode * extentSizeNode = getKeyPath( "extent_size", root );
+    if ( isValidPtr(extentSizeNode) && extentSizeNode->type == integerNode )
+    {
+        physicalVolume->extentSize = extentSizeNode->integer * drive->sectorSize;
+        DebugOut( "\n" );
+        Log( LOG_INFO, "extents are %ld KB long", physicalVolume->extentSize / 1024 );
+    }
+
+    tNode * physicalVolumes = getKeyPath( "physical_volumes", root );
+
+    DebugOut( "\n" );
+    Log( LOG_DEBUG, "######## physical volumes ########\n" );
+    dumpNodeTree( physicalVolumes );
+
+    if ( isValidPtr(physicalVolumes) && physicalVolumes->type == childNode )
+    {
+        forEachNode( physicalVolumes, physVolCallback, (void *)physicalVolume );
+        dumpPhysicalVolume(physicalVolume);
+    }
+
+    tNode * logicalVolume = getKeyPath( "logical_volumes", root );
+    logicalVolume = getKeyPath( lvName, logicalVolume );
+
+    DebugOut( "\n" );
+    Log( LOG_DEBUG, "######## logical volume ########\n" );
+    dumpNodeTree( logicalVolume );
+
+    tNode * segmentCountNode = getKeyPath( "segment_count", logicalVolume );
+    int segmentCount = 0;
+    if ( isValidPtr( segmentCountNode ) && segmentCountNode->type == integerNode )
+    {
+        segmentCount = segmentCountNode->integer;
+    }
+    if ( segmentCount > 0 )
+    {
+        if (segmentCount == 1)
+            Log( LOG_INFO, "there is one segment");
+        else
+            Log( LOG_INFO, "there are %d segments", segmentCount);
+
+        segments = calloc( sizeof(tLogicalVolumeSegment), segmentCount );
+        forEachNode( logicalVolume, logVolCallback, segments );
+        for (int i = 0; i < segmentCount; ++i)
+        {
+            for (int j = 0; j < segments[i].stripeCount; ++j)
+            {
+                tPhysicalVolume * pv = physicalVolume;
+                while ( isValidPtr(pv) )
+                {
+                    if ( strcmp( segments[i].stripes[j].pvName, pv->name ) == 0 )
+                    {
+                        segments[i].stripes[j].physicalVolume = pv;
+                        break;
+                    }
+                    pv = pv->next;
+                }
+            }
+        }
+
+#ifdef optDebugOutput
+        for ( int i = 0; i < segmentCount; ++i )
+        {
+            Log( LOG_INFO, "segment %d", i + 1 );
+            dumpSegment( &segments[i] );
+        }
+#endif
+    }
+
+    /* now we have enough information to actually read the segments into memory */
+
+    tMemoryBuffer * buffer = malloc( sizeof( tMemoryBuffer ) );
+
+    /** @todo this code assumes one stripe per segment */
+    if ( isHeapPtr( buffer ) )
+    {
+        buffer->length = 0;
+        for ( int i = 0; i < segmentCount; ++i )
+        {
+            buffer->length += segments[ i ].extentCount * segments[ i ].stripes->physicalVolume->extentSize;
+        }
+        buffer->start  = malloc( buffer->length );
+        if ( isValidPtr( buffer->start ) )
+        {
+            for ( int i = 0; i < segmentCount; ++i )
+            {
+                tStripe * stripe = segments[ i ].stripes;
+                physicalVolume = stripe->physicalVolume;
+
+                off64_t   extentSize = physicalVolume->extentSize;
+                off64_t   offset     = (physicalVolume->peStart * physicalVolume->drive->sectorSize)
+                                     + (stripe->startExtent * extentSize);
+
+                tBlock    destBlock;
+                destBlock.ptr    = &buffer->start[ segments[i].startExtent * extentSize ];
+                destBlock.length = segments[i].extentCount * extentSize;
+
+                Log(LOG_INFO, "extentSize = %ld (%1.2f MB)", extentSize, extentSize/1048576.0 );
+                Log(LOG_INFO, "    offset = %ld (%ld extents)", offset , offset / extentSize);
+
+                readDrive( stripe->physicalVolume->drive, offset, destBlock.ptr, destBlock.length );
+            }
+
+            dumpMemoryBuffer( buffer, lvName );
+        }
+    }
+
+    return (buffer);
 }

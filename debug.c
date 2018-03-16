@@ -7,21 +7,31 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <malloc.h>
+#include <libgen.h>
 
-#include "debug.h"
 #include "readaccess.h"
+#include "debug.h"
 
 /* used for pointer validation testing */
-/* set using alloca() on entry to main() */
-void * gStackTop;
+/* set using alloca() on entry to debugInit() */
+void       * gStackTop;
+const char * gExecName;
+
+void debugInit( int UNUSED(argc), char *argv[] )
+{
+    gStackTop = alloca( 0 );
+    gExecName = basename( argv[0] );
+}
 
 #define kRowLength  32
 /**
  *
+ * @param displayOffset
  * @param ptr
  * @param length
  */
-void dumpMemory(unsigned long displayOffset, char * ptr, size_t length)
+void dumpMemory(unsigned long displayOffset, void * ptr, size_t length)
 {
     if (isValidPtr(ptr))
     {
@@ -33,13 +43,13 @@ void dumpMemory(unsigned long displayOffset, char * ptr, size_t length)
 
             for (size_t j = 0; j < rowLength; ++j)
             {
-                DebugOut("%02x ", (unsigned char)ptr[i + j]);
+                DebugOut("%02x ", ((unsigned char *)ptr)[i + j]);
             }
 
             DebugOut("   |");
             for (size_t j = 0; j < rowLength; ++j)
             {
-                char c = ptr[i + j];
+                char c = ((unsigned char *)ptr)[i + j];
                 DebugOut("%c", (isgraph(c) || c == ' ') ? c : '.');
             }
 
@@ -54,17 +64,17 @@ void dumpMemory(unsigned long displayOffset, char * ptr, size_t length)
  * @param offset
  * @param length
  */
-void dumpDisk(tDrive * drive, off64_t offset, size_t length)
+void dumpDisk( tDrive * drive, off64_t offset, size_t length )
 {
-    char * block = calloc(length, 1);
-    if ( isHeapPtr(block) )
+    char * block = calloc( length, 1 );
+    if ( isHeapPtr( block ) )
     {
-        ssize_t rdLen = readDrive(drive, offset, block, length);
-        if (rdLen == (ssize_t)length)
+        ssize_t rdLen = readDrive( drive, offset, block, length );
+        if ( rdLen == (ssize_t) length )
         {
             dumpMemory( offset, block, length );
         }
-        free(block);
+        free( block );
     }
 }
 

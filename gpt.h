@@ -5,8 +5,6 @@
 #ifndef READLOGICALVOLUME_GPT_H
 #define READLOGICALVOLUME_GPT_H
 
-#define PACKED(name)  name __attribute__((packed))
-
 /* GPT header, points to the table itself. Primary copy is at LBA 1, after the protective MBR */
 
 typedef struct tGPTHeader
@@ -45,7 +43,7 @@ typedef struct tGPTEntry
     byte    firstLBA[8];            /* 32 (0x20)   8 bytes  First LBA (little endian) */
     byte    lastLBA[8];             /* 40 (0x28)   8 bytes  Last LBA (inclusive, usually odd) */
     byte    attributes[8];          /* 48 (0x30)   8 bytes  Attribute flags (e.g. bit 60 denotes read-only) */
-    byte    name[72];               /* 56 (0x38)  72 bytes  Partition name (36 UTF-16LE code units) */
+    char    name[72];               /* 56 (0x38)  72 bytes  Partition name (36 UTF-16LE code units) */
 } tGPTEntry;
 
 #endif //READLOGICALVOLUME_GPT_H

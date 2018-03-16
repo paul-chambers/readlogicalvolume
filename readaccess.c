@@ -9,15 +9,12 @@
 #include <unistd.h>
 #include <syslog.h>
 #include <sys/file.h>
-#include <errno.h>
 #include <string.h>
-#include <libgen.h>
-#include <inttypes.h>
 #include <endian.h>
+#include <sys/stat.h>
+#include <errno.h>
 
-#include "readlogicalvolume.h"
 #include "debug.h"
-#include "readaccess.h"
 
 /*********************************************************************************************
   drive access routines
@@ -29,7 +26,7 @@
 
 tDrive * openDrive( const char *drivePath )
 {
-    tDrive * drive = malloc(sizeof(tDrive));
+    tDrive * drive = calloc( sizeof(tDrive), 1 );
     if (drive != NULL)
     {
         drive->sectorSize = 512;
@@ -44,35 +41,69 @@ tDrive * openDrive( const char *drivePath )
         }
         else
         {
-            drive->path = strdup(drivePath);
-            if (drive->path == NULL)
+            struct stat st;
+            if ( fstat( drive->id, &st) < 0 )
             {
-                Log(LOG_ERR, "### unable to store the path \'%s\' (%d: %s)\n",
-                    drivePath, errno, strerror(errno) );
-                free(drive);
-                drive = NULL;
+                Log( LOG_ERR, "unable to get the size of the drive (%d: %s)", errno, strerror(errno) );
+            }
+            else
+            {
+                drive->partition.start  = 0;
+                drive->partition.length = 4096;
+                Log( LOG_INFO, "drive size %ld (%.2f MB)",
+                     drive->partition.length,
+                     drive->partition.length / 1048576.0 );
+
+                    drive->path = strdup(drivePath);
+                if (drive->path == NULL)
+                {
+                    Log(LOG_ERR, "### unable to store the path \'%s\' (%d: %s)\n",
+                        drivePath, errno, strerror(errno) );
+                    free(drive);
+                    drive = NULL;
+                }
             }
         }
     }
     return (drive);
 }
 
+void setPartition( tDrive * drive, off64_t offset, size_t length )
+{
+    drive->partition.start  = offset;
+    drive->partition.length = length;
+    Log( LOG_INFO, "partition start %ld (%#lx), size %ld (%.2f MB)",
+         drive->partition.start,  drive->partition.start,
+         drive->partition.length, drive->partition.length / 1048576.0 );
+}
+
 ssize_t readDrive( tDrive * drive, off64_t offset, void * dest, size_t length )
 {
     ssize_t result = 0;
 
-    Log(LOG_DEBUG,"ofst:%8lx len:%8lx", offset, length);
-    if (drive != NULL)
+    Log( LOG_DEBUG, "readDrive( offset %#lx, %ld (%#lx) bytes)", offset, length, length );
+    if ( drive != NULL )
     {
-        if (lseek64(drive->id, offset, SEEK_SET) < 0)
+        if ( (offset + length) > drive->partition.length )
         {
-            Log(LOG_ERR, "seek to offset %lu failed (%d: %s)", offset, errno, strerror(errno));
+            Log( LOG_ERR, "read requested past the end of partition (%ld + %ld > %ld)",
+                 offset, length, drive->partition.start + drive->partition.length );
         }
-        else {
-            result = read(drive->id, dest, length);
-            if (result < 0) {
-                Log(LOG_ERR, "read @ offset %lu for %lu bytes failed (%d: %s)\n",
-                    offset, length, errno, strerror(errno));
+        else
+        {
+            if ( lseek64( drive->id, drive->partition.start + offset, SEEK_SET ) < 0 )
+            {
+                Log( LOG_ERR, "seek to offset %lu failed (%d: %s)",
+                     drive->partition.start + offset, errno, strerror( errno ) );
+            }
+            else
+            {
+                result = read( drive->id, dest, length );
+                if ( result < 0 )
+                {
+                    Log( LOG_ERR, "read @ offset %lu for %lu bytes failed (%d: %s)\n",
+                         offset, length, errno, strerror( errno ) );
+                }
             }
         }
     }
@@ -91,5 +122,6 @@ void closeDrive( tDrive * drive )
     }
 }
 
-/****************************** end of drive access routines ********************************
-*********************************************************************************************/
+/*******************************************************************************************\
+|                               end of drive access routines                                |
+\*******************************************************************************************/
