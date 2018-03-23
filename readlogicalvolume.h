@@ -8,23 +8,15 @@
 typedef unsigned char byte;     // old habits die hard...
 typedef char tStringZ;          // zero-terminated string/char pointer
 
-
-typedef struct
-{
-    byte * start;
-    size_t length;
-    byte   hash[64];
-} tMemoryBuffer;
-
 typedef struct
 {
     byte * ptr;
     size_t length;
-} tBlock;
+} tMemoryBlock;
 
 typedef struct
 {
-    tBlock  block;
+    tMemoryBlock  block;
     byte  * start;
     byte  * end;
 } tTextBlock;

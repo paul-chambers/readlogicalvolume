@@ -25,7 +25,7 @@ extern void * gStackTop;
 /* scrutinise pointers a little harder than just checking they're not NULL */
 #undef optDebugPointers
 
-#ifdef  optDebugPointers
+#ifdef optDebugPointers
     /* check it's not null, and below the upper reaches of the stack */
     #define isValidPtr( ptr )   (ptr != NULL && ptr < gStackTop)
     /* check it's not NULL, is longword aligned, and below the current value of brk (top of C heap) */
@@ -40,11 +40,14 @@ extern void * gStackTop;
 /* enable debugging output - pretty verbose */
 #define optDebugOutput
 
+/* actual failures are always logged */
+#define LogError( msg, ... )  fprintf( stderr, "### %18s [%3d] " msg "\n", __func__, __LINE__, ##__VA_ARGS__ )
+
 #ifdef  optDebugOutput
-    #define Log( level, msg, ... )  fprintf( stderr, "### %18s [%3d] " msg "\n", __func__, __LINE__, ##__VA_ARGS__ )
-    #define DebugOut( msg, ... )    fprintf(stderr, msg, ##__VA_ARGS__)
+    #define LogInfo( msg, ... )   fprintf( stderr, "... %18s [%3d] " msg "\n", __func__, __LINE__, ##__VA_ARGS__ )
+    #define DebugOut( msg, ... )  fprintf( stderr, msg, ##__VA_ARGS__)
 #else
-    #define Log( level, msg, ... )
+    #define LogInfo( level, msg, ... )
     #define DebugOut( msg, ... )
 #endif
 

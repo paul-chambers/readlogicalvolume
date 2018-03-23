@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <syslog.h>
 //#include <sys/file.h>
 #include <string.h>
@@ -128,7 +129,7 @@ void dumpGPTEntry( tGPTEntry * entry )
               get16LE( &entry->type[ 6 ] ),
               getBE( &entry->type[ 8 ], 2 ),
               getBE( &entry->type[ 10 ], 6 ) );
-    Log( LOG_INFO, "      type %s", uuid );
+    LogInfo( "      type %s", uuid );
 
     /* unique[16];    16 (0x10)  16 bytes  Unique partition GUID */
     /* thank Microsoft for the 'mixed-endian' representation */
@@ -139,14 +140,14 @@ void dumpGPTEntry( tGPTEntry * entry )
               get16LE( &entry->unique[ 6 ] ),
               getBE( &entry->unique[ 8 ], 2 ),
               getBE( &entry->unique[ 10 ], 6 ) );
-    Log( LOG_INFO, "      UUID %s", uuid );
+    LogInfo( "      UUID %s", uuid );
 
     /* firstLBA[8];   32 (0x20)   8 bytes  First LBA (little endian) */
-    Log( LOG_INFO, "  firstLBA %ld (%#lx)", get64LE( entry->firstLBA ), get64LE( entry->firstLBA ) );
+    LogInfo( "  firstLBA %ld (%#lx)", get64LE( entry->firstLBA ), get64LE( entry->firstLBA ) );
     /* lastLBA[8];    40 (0x28)   8 bytes  Last LBA (inclusive, usually odd) */
-    Log( LOG_INFO, "    lasLBA %ld (%#lx)", get64LE( entry->lastLBA ),  get64LE( entry->lastLBA ) );
+    LogInfo( "    lasLBA %ld (%#lx)", get64LE( entry->lastLBA ),  get64LE( entry->lastLBA ) );
     /* attributes[8]; 48 (0x30)   8 bytes  Attribute flags (e.g. bit 60 denotes read-only) */
-    Log( LOG_INFO, "attributes %lx", get64LE( entry->attributes ) );
+    LogInfo( "attributes %lx", get64LE( entry->attributes ) );
     /* name[72];      56 (0x38)  72 bytes  Partition name (36 UTF-16LE code units) */
     /* hack to convert UTF-16LE to plain ascii */
     p = name;
@@ -166,7 +167,7 @@ void dumpGPTEntry( tGPTEntry * entry )
         ++q;
     }
     *p = '\0';
-    Log( LOG_INFO, "      name %s", name );
+    LogInfo( "      name %s", name );
 #endif
 }
 
@@ -183,7 +184,7 @@ tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
 
     if ( rdLen != (ssize_t) mdHeaderLength )
     {
-        Log( LOG_ERR, "unable to read metadata header (%d: %s)", errno, strerror( errno ) );
+        LogError( "unable to read metadata header (%d: %s)", errno, strerror( errno ) );
     }
     else
     {
@@ -193,9 +194,9 @@ tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
             metadata.offset = get64LE( mdHeader->offset );
             metadata.length = get64LE( mdHeader->size );
 
-            Log( LOG_INFO, "metadata signature matched" );
-            Log( LOG_INFO, "  metadata offset %8lx", metadata.offset );
-            Log( LOG_INFO, "    metadata size %8lx", metadata.length );
+            LogInfo( "metadata signature matched" );
+            LogInfo( "  metadata offset %8lx", metadata.offset );
+            LogInfo( "    metadata size %8lx", metadata.length );
 
             tLVMRawLocation * rawLoc = mdHeader->list;
             while ( !SixteenBytesAreZero( (byte *) rawLoc ) )
@@ -203,14 +204,14 @@ tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
                 off64_t offset = get64LE( rawLoc->offset );
                 size_t  length = get64LE( rawLoc->size );
 
-                Log( LOG_INFO, "  offset %8lx", offset );
-                Log( LOG_INFO, "    size %8lx", length );
-                Log( LOG_INFO, "   crc32 %08x", get32LE( rawLoc->crc32 ) );
-                Log( LOG_INFO, "   flags %08x", get32LE( rawLoc->flags ) );
+                LogInfo( "  offset %8lx", offset );
+                LogInfo( "    size %8lx", length );
+                LogInfo( "   crc32 %08x", get32LE( rawLoc->crc32 ) );
+                LogInfo( "   flags %08x", get32LE( rawLoc->flags ) );
 
                 if ( (get32LE( rawLoc->flags ) & (MDA_IGNORED | MDA_INCONSISTENT | MDA_FAILED)) == 0 )
                 {
-                    Log( LOG_INFO, "found active metadata" );
+                    LogInfo( "found active metadata" );
 
                     result = calloc( sizeof( tTextBlock ), 1 );
 
@@ -223,7 +224,7 @@ tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
                             rdLen = readDrive( drive, metadata.offset + offset, result->block.ptr, length );
                             if ( rdLen != (ssize_t)length )
                             {
-                                Log(LOG_ERR, "unable to read metadata text" );
+                                LogError( "unable to read metadata text" );
                             }
                             else
                             {
@@ -238,38 +239,11 @@ tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
             }
         }
     }
-#if 0
-    tDiskBlock * block = metadataList;
-    result->block.length = 0;
-    while (block->length != 0)
+    if ( result == NULL )
     {
-        result->block.length += block->length;
+        LogError( "unable to find an active metadata area" );
     }
-    result->block.ptr = malloc( result->block.length );
 
-    block = metadataList;
-    while (block->length != 0)
-    {
-        /* grab the active metadata */
-        ssize_t rdLen = readDrive( drive,
-                                   metadataBase + block->offset,
-                                   result->block.ptr + block->offset,
-                                   block->length );
-        if ( rdLen != (ssize_t) result->block.length )
-        {
-            Log( LOG_ERR, "unable to read metadata area (%d: %s)", errno, strerror( errno ) );
-        }
-        else
-        {
-#ifdef optDebugOutput
-            DebugOut( "\n_______________________________\n\n" );
-            fwrite( result->block.ptr, result->block.length, 1, stderr );
-            DebugOut( "\n_______________________________\n\n" );
-#endif
-        }
-
-    }
-#endif
     return result;
 }
 
@@ -296,7 +270,7 @@ tDiskBlock * readPhysicalVolumeLabel( tDrive * drive )
         ssize_t rdlen = readDrive( drive, 0, label, pvLabelRdLen );
         if ( rdlen != (ssize_t) pvLabelRdLen )
         {
-            Log( LOG_ERR, "unable to read pvLabel area (%d: %s)", errno, strerror( errno ) );
+            LogError( "unable to read pvLabel area (%d: %s)", errno, strerror( errno ) );
         }
         else
         {
@@ -308,12 +282,12 @@ tDiskBlock * readPhysicalVolumeLabel( tDrive * drive )
                 {
 #ifdef optDebugOutput
                     const char * ordinal[] = {"first", "second", "third", "fourth"};
-                    Log( LOG_INFO, "found pvLabel in the %s sector", ordinal[ i ] );
+                    LogInfo( "found pvLabel in the %s sector", ordinal[ i ] );
 #endif
                     tLVMPVHeader * pvHeader = (tLVMPVHeader *) ((byte *) label + get32LE( label->offset ));
-                    Log( LOG_INFO, "PV UUID is %32s", pvHeader->uuid );
+                    LogInfo( "PV UUID is %32s", pvHeader->uuid );
                     size_t pvSize = get64LE( pvHeader->size );
-                    Log( LOG_INFO, "PV size is %ld", pvSize );
+                    LogInfo( "PV size is %ld", pvSize );
 
                     tLVMDataArea * dataArea = pvHeader->list;
                     /* skip over the data list. we want the metadata list that follows it. */
@@ -341,7 +315,7 @@ tDiskBlock * readPhysicalVolumeLabel( tDrive * drive )
                     {
                         list->offset = get64LE( dataArea->offset );
                         list->length = get64LE( dataArea->size );
-                        Log( LOG_INFO, "    data area: offset %lx, %ld bytes", list->offset, list->length );
+                        LogInfo( "    data area: offset %lx, %ld bytes", list->offset, list->length );
                         ++list;
                         ++dataArea;
                     }
@@ -350,6 +324,7 @@ tDiskBlock * readPhysicalVolumeLabel( tDrive * drive )
                 }
                 label = (tLVMPVLabel *) ((byte *) label + drive->sectorSize);
             }
+            LogError("no Physical Volume Label was found");
         }
     }
     return NULL;
@@ -373,24 +348,24 @@ tDrive * readGPT( tDrive * drive )
             ssize_t rdLen = readDrive( drive, drive->sectorSize, gptHeader, sizeof( tGPTHeader ) );
             if ( rdLen != sizeof( tGPTHeader ) )
             {
-                Log( LOG_ERR, "Unable to read GPT header (%d: %s)", errno, strerror( errno ) );
+                LogError( "Unable to read GPT header (%d: %s)", errno, strerror( errno ) );
             }
             else
             {
                 uint32_t crc32 = get32LE( gptHeader->crc32 );
                 memset( gptHeader->crc32, 0, sizeof( gptHeader->crc32 ) );
-                if ( memcmp( gptHeader->signature, "EFI PART", 8 ) != 0
-                    || get32LE( gptHeader->revision ) != 0x00010000
-                    || !checkCRC32( crc32, (byte *) gptHeader, drive->sectorSize ) )
+                if ( !(memcmp( gptHeader->signature, "EFI PART", 8 ) == 0
+                    && get32LE( gptHeader->revision ) == 0x00010000
+                    && checkCRC32( crc32, (byte *) gptHeader, drive->sectorSize )) )
                 {
-                    Log( LOG_INFO, "signature incorrect" );
+                    LogInfo( "signature incorrect" );
                 }
                 else
                 {
-                    Log( LOG_INFO, "signature & revision are correct" );
-                    Log( LOG_INFO, " Partition first LBA = %ld", get64LE( gptHeader->partitionTable.firstLBA ) );
-                    Log( LOG_INFO, "     Partition Count = %d",  get32LE( gptHeader->partitionTable.count ) );
-                    Log( LOG_INFO, "Partition Entry Size = %d",  get32LE( gptHeader->partitionTable.size ) );
+                    LogInfo( "signature & revision are correct" );
+                    LogInfo( " Partition first LBA = %ld", get64LE( gptHeader->partitionTable.firstLBA ) );
+                    LogInfo( "     Partition Count = %d",  get32LE( gptHeader->partitionTable.count ) );
+                    LogInfo( "Partition Entry Size = %d",  get32LE( gptHeader->partitionTable.size ) );
 
                     size_t tableLength = get32LE( gptHeader->partitionTable.count )
                                        * get32LE( gptHeader->partitionTable.size );
@@ -403,11 +378,11 @@ tDrive * readGPT( tDrive * drive )
                         rdLen = readDrive( drive, gptTableOffset, gptTable, tableLength );
                         if ( rdLen != (ssize_t) tableLength )
                         {
-                            Log( LOG_ERR, "Unable to read partition table (%d: %s)", errno, strerror( errno ) );
+                            LogError( "Unable to read partition table (%d: %s)", errno, strerror( errno ) );
                         }
                         else
                         {
-                            Log( LOG_INFO, "read of partition table successful" );
+                            LogInfo( "read of partition table successful" );
                             tGPTEntry * entry = gptTable;
                             size_t  entrySize = get32LE( gptHeader->partitionTable.size );
                             for ( int count   = get32LE( gptHeader->partitionTable.count ); count > 0; --count )
@@ -418,7 +393,7 @@ tDrive * readGPT( tDrive * drive )
                                 }
                                 if ( UUIDisLVM( entry->type ) )
                                 {
-                                    Log( LOG_INFO, "found LVM PV partition" );
+                                    LogInfo( "found LVM PV partition" );
 
                                     setPartition( drive,
                                                   get64LE( entry->firstLBA ) * drive->sectorSize,
@@ -440,7 +415,7 @@ tDrive * readGPT( tDrive * drive )
 
 
 /*
- * below is a skeleton to use for testing. Wouldn't be used in a bootloader
+ * below is a skeleton to use for testing. Wouldn't use this in a bootloader
  */
 
 /**
@@ -450,6 +425,23 @@ tDrive * readGPT( tDrive * drive )
 void usage( FILE * output )
 {
     fprintf( output, "### error: %s <drive path> <logical volume label>\n", gExecName );
+}
+
+void writeMemoryBuffer( tMemoryBlock * buffer, const char * lvName )
+{
+    char filename[256];
+    snprintf( filename, sizeof( filename ), "%s.bin", lvName );
+    int fd = creat( filename, S_IRUSR | S_IRGRP );
+    if ( fd == -1 )
+    {
+        LogError( "unable to open file \"%s\" (%d: %s)", filename, errno, strerror( errno ) );
+    }
+    else
+    {
+        LogInfo( " writing memory block @ %p to \'%s\'", buffer, filename );
+        write( fd, buffer->ptr, buffer->length );
+        close( fd );
+    }
 }
 
 /**
@@ -483,13 +475,14 @@ int main( int argc, char * argv[] )
                     tNode * metadataTree = parseMetadata( metadata );
                     if ( isValidPtr(metadataTree) )
                     {
-                        tMemoryBuffer * buffer = readLogicalVolume( drive, argv[2], metadataTree );
+                        tMemoryBlock * buffer = readLogicalVolume( drive, argv[2], metadataTree );
                         if ( isValidPtr( buffer ) )
                         {
-                            Log( LOG_INFO, "memory buffer @ %p", (void *) buffer );
-                            Log( LOG_INFO, "        start = %p", (void *) buffer->start );
-                            Log( LOG_INFO, "       length = %ld (0x%lx)", buffer->length, buffer->length );
-                            Log( LOG_INFO, "         hash @ %p", (void *) buffer->hash );
+                            LogInfo( "memory block @ %p", (void *) buffer );
+                            LogInfo( "     pointer = %p", (void *) buffer->ptr );
+                            LogInfo( "      length = %ld (0x%lx)", buffer->length, buffer->length );
+
+                            writeMemoryBuffer( buffer, argv[2] );
                         }
                     }
                 }
