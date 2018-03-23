@@ -112,9 +112,9 @@ int UUIDisLVM( byte * uuid )
  * @param entry
  */
 
+#ifdef optDebugOutput
 void dumpGPTEntry( tGPTEntry * entry )
 {
-#ifdef optDebugOutput
     char name[37];
     char * p;
     char uuid[40];
@@ -167,8 +167,10 @@ void dumpGPTEntry( tGPTEntry * entry )
     }
     *p = '\0';
     Log( LOG_INFO, "      name %s", name );
-#endif
 }
+#else
+#define dumpGPTEntry( arg )
+#endif
 
 tTextBlock * readMetadata( tDrive * drive, tDiskBlock * metadataList )
 {
@@ -379,15 +381,16 @@ tDrive * readGPT( tDrive * drive )
             {
                 uint32_t crc32 = get32LE( gptHeader->crc32 );
                 memset( gptHeader->crc32, 0, sizeof( gptHeader->crc32 ) );
+
                 if ( memcmp( gptHeader->signature, "EFI PART", 8 ) != 0
                     || get32LE( gptHeader->revision ) != 0x00010000
-                    || !checkCRC32( crc32, (byte *) gptHeader, drive->sectorSize ) )
+                    || !checkCRC32( crc32, (byte *) gptHeader, get32LE(gptHeader->size) ) )
                 {
-                    Log( LOG_INFO, "signature incorrect" );
+                    Log( LOG_INFO, "signature, revision or CRC is incorrect" );
                 }
                 else
                 {
-                    Log( LOG_INFO, "signature & revision are correct" );
+                    Log( LOG_INFO, "signature, revision & CRC are correct" );
                     Log( LOG_INFO, " Partition first LBA = %ld", get64LE( gptHeader->partitionTable.firstLBA ) );
                     Log( LOG_INFO, "     Partition Count = %d",  get32LE( gptHeader->partitionTable.count ) );
                     Log( LOG_INFO, "Partition Entry Size = %d",  get32LE( gptHeader->partitionTable.size ) );
@@ -449,7 +452,7 @@ tDrive * readGPT( tDrive * drive )
  */
 void usage( FILE * output )
 {
-    fprintf( output, "### error: %s <drive path> <logical volume label>\n", gExecName );
+    fprintf( output, "### usage: %s <drive path> <logical volume label>\n", gExecName );
 }
 
 /**

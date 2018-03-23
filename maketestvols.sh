@@ -1,4 +1,6 @@
 #!/bin/bash
+set -x
+
 sudo vgcreate --verbose vg0 $1
 # make sure kernel isn't first
 sudo lvcreate --verbose --extent 1 --name One vg0
