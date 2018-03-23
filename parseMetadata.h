@@ -56,6 +56,6 @@ typedef struct tLogicalVolumeSegment {
 } tLogicalVolumeSegment;
 
 tNode         * parseMetadata( tTextBlock * metadata );
-tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * root );
+tMemoryBlock * readLogicalVolume( tDrive * drive, const char * lvName, tNode * root );
 
 #endif //READLOGICALVOLUME_PARSEMETADATA_H

@@ -15,7 +15,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <errno.h>
 #include <syslog.h>
 #include <string.h>
@@ -123,7 +122,7 @@ char * dupString( tTextBlock * buf )
         if ( isHeapPtr( result ) )
         {
 #if 0
-            Log(LOG_DEBUG, "string:");
+            LogInfo(  "string:");
             fprintf(stderr, "\"");
             fwrite(buf->start, buf->end - buf->start - 1, 1, stderr);
             fprintf(stderr, "\"\n");
@@ -284,32 +283,32 @@ tNode * getKeyPath( const char * keyPath, tNode * root )
 
 void dumpPhysicalVolume( tPhysicalVolume * pv )
 {
-    Log( LOG_INFO, "pv @ %p, next @ %p", pv, pv->next );
-    Log( LOG_INFO, "      drive @ %p",   pv->drive );
-    Log( LOG_INFO, "       name = \"%s\"",  pv->name );
-    Log( LOG_INFO, "         id = \"%s\"",  pv->id  );
-    Log( LOG_INFO, "        dev = \"%s\"",  pv->dev );
-    Log( LOG_INFO, " extentSize = %ld", pv->extentSize );
-    Log( LOG_INFO, "    devSize = %ld", pv->devSize );
-    Log( LOG_INFO, "    peStart = %ld", pv->peStart );
-    Log( LOG_INFO, "    peCount = %ld", pv->peCount );
+    LogInfo( "pv @ %p, next @ %p", pv, pv->next );
+    LogInfo( "      drive @ %p",   pv->drive );
+    LogInfo( "       name = \"%s\"",  pv->name );
+    LogInfo( "         id = \"%s\"",  pv->id  );
+    LogInfo( "        dev = \"%s\"",  pv->dev );
+    LogInfo( " extentSize = %ld", pv->extentSize );
+    LogInfo( "    devSize = %ld", pv->devSize );
+    LogInfo( "    peStart = %ld", pv->peStart );
+    LogInfo( "    peCount = %ld", pv->peCount );
 }
 
 void dumpSegment( tLogicalVolumeSegment * segment )
 {
 #ifdef optDebugOutput
-    Log( LOG_INFO, "  start extent = %ld", segment->startExtent );
-    Log( LOG_INFO, "  extent count = %ld", segment->extentCount );
-    Log( LOG_INFO, "  stripe count = %ld", segment->stripeCount );
-    Log( LOG_INFO, "  stripes @ %p",  segment->stripes );
+    LogInfo( "  start extent = %ld", segment->startExtent );
+    LogInfo( "  extent count = %ld", segment->extentCount );
+    LogInfo( "  stripe count = %ld", segment->stripeCount );
+    LogInfo( "  stripes @ %p",  segment->stripes );
     for ( int j = 0; j < segment->stripeCount; ++j )
     {
-        Log( LOG_INFO, "    stripe[%d]         pvName = \"%s\"", j, segment->stripes[j].pvName );
-        Log( LOG_INFO, "    stripe[%d] physicalVolume @ %p \"%s\"",
+        LogInfo( "    stripe[%d]         pvName = \"%s\"", j, segment->stripes[j].pvName );
+        LogInfo( "    stripe[%d] physicalVolume @ %p \"%s\"",
              j,
              segment->stripes[j].physicalVolume,
              segment->stripes[j].physicalVolume->name );
-        Log( LOG_INFO, "    stripe[%d]   start extent = %ld",    j, segment->stripes[j].startExtent );
+        LogInfo( "    stripe[%d]   start extent = %ld",    j, segment->stripes[j].startExtent );
     }
 #endif
 }
@@ -349,12 +348,12 @@ void dumpNode( tNode * node, int depth )
             snprintf(scratch, sizeof(scratch), "unknown type (%d)", node->type);
             break;
         }
-        Log( LOG_INFO, "%s | node @ %10p, next @ %10p, (hash %016lx) \"%s\" = %s",
+        LogInfo( "%s | node @ %10p, next @ %10p, (hash %016lx) \"%s\" = %s",
              &kIndent[ i ], node, node->next, node->hash, node->key, scratch );
     }
     else
     {
-        Log( LOG_INFO, "%s node is (nil)", &kIndent[ i ] );
+        LogInfo( "%s node is (nil)", &kIndent[ i ] );
     }
 #endif
 }
@@ -379,21 +378,6 @@ void dumpNodeTree( tNode * node )
 #endif
 }
 
-void dumpMemoryBuffer( tMemoryBuffer * buffer, const char * lvName )
-{
-    char filename[256];
-    snprintf( filename, sizeof( filename ), "%s.bin", lvName );
-    int fd = creat( filename, S_IRUSR | S_IRGRP );
-    if ( fd == -1 )
-    {
-        Log( LOG_ERR, "unable to open file \"%s\" (%d: %s)", filename, errno, strerror( errno ) );
-    }
-    else
-    {
-        write( fd, buffer->start, buffer->length );
-        close( fd );
-    }
-}
 
 /****************************************************************************/
 
@@ -615,7 +599,7 @@ tNode * parseChild( tNode * node, tTextBlock * buf )
             setStringStart( buf );
             do { c = getNextChar( buf ); } while ( c != EOF && c != '\n' );
             setStringEnd( buf );
-            // Log(LOG_INFO, "comment: \"%s\"", dupString( buf ));
+            // LogInfo( "comment: \"%s\"", dupString( buf ));
             break;
 
         case '\n':
@@ -682,7 +666,7 @@ tNode * parseMetadata( tTextBlock * metadata )
         root->next  = NULL;
 
         DebugOut( "\n" );
-        Log( LOG_DEBUG, "######## node dump ########\n" );
+        LogInfo( "######## node dump ########\n" );
         dumpNodeTree( root );
     }
     return root;
@@ -720,7 +704,7 @@ tNode *physVolCallback( tNode * node, int depth, int index, void * cbData )
         else
         {
             /** @todo handle multiple physical volumes */
-            Log(LOG_ERR,"multiple physical volumes - not currently supported");
+            LogError("multiple physical volumes - not currently supported");
         }
         break;
 
@@ -862,7 +846,7 @@ tNode * logVolCallback( tNode * node, int depth, int index, void * cbData )
     return NULL;
 }
 
-tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * root )
+tMemoryBlock * readLogicalVolume( tDrive * drive, const char * lvName, tNode * root )
 {
     tPhysicalVolume * physicalVolume;
     tLogicalVolumeSegment * segments;
@@ -875,13 +859,13 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
     {
         physicalVolume->extentSize = extentSizeNode->integer * drive->sectorSize;
         DebugOut( "\n" );
-        Log( LOG_INFO, "extents are %ld KB long", physicalVolume->extentSize / 1024 );
+        LogInfo( "extents are %ld KB long", physicalVolume->extentSize / 1024 );
     }
 
     tNode * physicalVolumes = getKeyPath( "physical_volumes", root );
 
     DebugOut( "\n" );
-    Log( LOG_DEBUG, "######## physical volumes ########\n" );
+    LogInfo( "######## physical volumes ########\n" );
     dumpNodeTree( physicalVolumes );
 
     if ( isValidPtr(physicalVolumes) && physicalVolumes->type == childNode )
@@ -894,7 +878,7 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
     logicalVolume = getKeyPath( lvName, logicalVolume );
 
     DebugOut( "\n" );
-    Log( LOG_DEBUG, "######## logical volume ########\n" );
+    LogInfo( "######## logical volume ########\n" );
     dumpNodeTree( logicalVolume );
 
     tNode * segmentCountNode = getKeyPath( "segment_count", logicalVolume );
@@ -906,9 +890,9 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
     if ( segmentCount > 0 )
     {
         if (segmentCount == 1)
-            Log( LOG_INFO, "there is one segment");
+            LogInfo( "there is one segment");
         else
-            Log( LOG_INFO, "there are %d segments", segmentCount);
+            LogInfo( "there are %d segments", segmentCount);
 
         segments = calloc( sizeof(tLogicalVolumeSegment), segmentCount );
         forEachNode( logicalVolume, logVolCallback, segments );
@@ -932,7 +916,7 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
 #ifdef optDebugOutput
         for ( int i = 0; i < segmentCount; ++i )
         {
-            Log( LOG_INFO, "segment %d", i + 1 );
+            LogInfo( "segment %d", i + 1 );
             dumpSegment( &segments[i] );
         }
 #endif
@@ -940,7 +924,7 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
 
     /* now we have enough information to actually read the segments into memory */
 
-    tMemoryBuffer * buffer = malloc( sizeof( tMemoryBuffer ) );
+    tMemoryBlock * buffer = malloc( sizeof( tMemoryBlock ) );
 
     /** @todo this code assumes one stripe per segment */
     if ( isHeapPtr( buffer ) )
@@ -950,8 +934,8 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
         {
             buffer->length += segments[ i ].extentCount * segments[ i ].stripes->physicalVolume->extentSize;
         }
-        buffer->start  = malloc( buffer->length );
-        if ( isValidPtr( buffer->start ) )
+        buffer->ptr  = malloc( buffer->length );
+        if ( isValidPtr( buffer->ptr ) )
         {
             for ( int i = 0; i < segmentCount; ++i )
             {
@@ -962,17 +946,15 @@ tMemoryBuffer * readLogicalVolume( tDrive * drive, const char * lvName, tNode * 
                 off64_t   offset     = (physicalVolume->peStart * physicalVolume->drive->sectorSize)
                                      + (stripe->startExtent * extentSize);
 
-                tBlock    destBlock;
-                destBlock.ptr    = &buffer->start[ segments[i].startExtent * extentSize ];
+                tMemoryBlock destBlock;
+                destBlock.ptr    = &buffer->ptr[ segments[i].startExtent * extentSize ];
                 destBlock.length = segments[i].extentCount * extentSize;
 
-                Log(LOG_INFO, "extentSize = %ld (%1.2f MB)", extentSize, extentSize/1048576.0 );
-                Log(LOG_INFO, "    offset = %ld (%ld extents)", offset , offset / extentSize);
+                LogInfo( "extentSize = %ld (%1.2f MB)", extentSize, extentSize/1048576.0 );
+                LogInfo( "    offset = %ld (%ld extents)", offset , offset / extentSize);
 
                 readDrive( stripe->physicalVolume->drive, offset, destBlock.ptr, destBlock.length );
             }
-
-            dumpMemoryBuffer( buffer, lvName );
         }
     }
 

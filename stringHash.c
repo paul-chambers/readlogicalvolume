@@ -103,20 +103,10 @@ int checkCRC32( uint32_t crcToCheck, byte * data, size_t length )
 
     crc ^= ~0;
     /* check the generated CRC against the provided CRC */
-    Log(LOG_INFO, "CRC to check: %08x, Generated CRC: %08x", crcToCheck, crc );
-    return 1;
-}
+    /* done this way so I can be lazy and stub out this routine */
+    LogInfo( "CRC to check: %08x, Generated CRC: %08x", crcToCheck, crc );
 
-/**
- *
- * @param buffer
- * @param start
- * @param length
- * @return
- */
-int calcHash( tMemoryBuffer * UNUSED(buffer) )
-{
-    return (0);
+    return 1;
 }
 
 

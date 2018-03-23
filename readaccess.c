@@ -34,7 +34,7 @@ tDrive * openDrive( const char *drivePath )
         drive->id = open(drivePath, O_RDONLY);
         if (drive->id < 0)
         {
-            Log(LOG_ERR, "unable to open \'%s\' (%d: %s)",
+            LogError( "unable to open \'%s\' (%d: %s)",
                 drivePath, errno, strerror(errno) );
             free(drive);
             drive = NULL;
@@ -44,20 +44,20 @@ tDrive * openDrive( const char *drivePath )
             struct stat st;
             if ( fstat( drive->id, &st) < 0 )
             {
-                Log( LOG_ERR, "unable to get the size of the drive (%d: %s)", errno, strerror(errno) );
+                LogError( "unable to get the size of the drive (%d: %s)", errno, strerror(errno) );
             }
             else
             {
                 drive->partition.start  = 0;
                 drive->partition.length = 4096;
-                Log( LOG_INFO, "drive size %ld (%.2f MB)",
+                LogInfo( "drive size %ld (%.2f MB)",
                      drive->partition.length,
                      drive->partition.length / 1048576.0 );
 
                     drive->path = strdup(drivePath);
                 if (drive->path == NULL)
                 {
-                    Log(LOG_ERR, "### unable to store the path \'%s\' (%d: %s)\n",
+                    LogError( "### unable to store the path \'%s\' (%d: %s)\n",
                         drivePath, errno, strerror(errno) );
                     free(drive);
                     drive = NULL;
@@ -72,7 +72,7 @@ void setPartition( tDrive * drive, off64_t offset, size_t length )
 {
     drive->partition.start  = offset;
     drive->partition.length = length;
-    Log( LOG_INFO, "partition start %ld (%#lx), size %ld (%.2f MB)",
+    LogInfo( "partition start %ld (%#lx), size %ld (%.2f MB)",
          drive->partition.start,  drive->partition.start,
          drive->partition.length, drive->partition.length / 1048576.0 );
 }
@@ -81,19 +81,19 @@ ssize_t readDrive( tDrive * drive, off64_t offset, void * dest, size_t length )
 {
     ssize_t result = 0;
 
-    Log( LOG_DEBUG, "readDrive( offset %#lx, %ld (%#lx) bytes)", offset, length, length );
+    LogInfo( "readDrive( offset %#lx, %ld (%#lx) bytes)", offset, length, length );
     if ( drive != NULL )
     {
         if ( (offset + length) > drive->partition.length )
         {
-            Log( LOG_ERR, "read requested past the end of partition (%ld + %ld > %ld)",
+            LogError( "read requested past the end of partition (%ld + %ld > %ld)",
                  offset, length, drive->partition.start + drive->partition.length );
         }
         else
         {
             if ( lseek64( drive->id, drive->partition.start + offset, SEEK_SET ) < 0 )
             {
-                Log( LOG_ERR, "seek to offset %lu failed (%d: %s)",
+                LogError( "seek to offset %lu failed (%d: %s)",
                      drive->partition.start + offset, errno, strerror( errno ) );
             }
             else
@@ -101,7 +101,7 @@ ssize_t readDrive( tDrive * drive, off64_t offset, void * dest, size_t length )
                 result = read( drive->id, dest, length );
                 if ( result < 0 )
                 {
-                    Log( LOG_ERR, "read @ offset %lu for %lu bytes failed (%d: %s)\n",
+                    LogError( "read @ offset %lu for %lu bytes failed (%d: %s)\n",
                          offset, length, errno, strerror( errno ) );
                 }
             }
